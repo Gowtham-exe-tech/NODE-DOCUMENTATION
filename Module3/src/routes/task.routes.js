@@ -3,8 +3,18 @@ const authenticate = require("../middleware/authenticate");
 const authorize = require("../middleware/authorize");
 const validate = require("../middleware/validate");
 const asyncHandler = require("../middleware/asyncHandler");
-const { createTaskSchema, updateTaskSchema } = require("../schemas/task.schema");
-const { getTasks, getAllTasksAdmin, getTask, createTask, updateTask, deleteTask } = require("../controllers/task.controller");
+const {
+  createTaskSchema,
+  updateTaskSchema,
+} = require("../schemas/task.schema");
+const {
+  getTasks,
+  getAllTasksAdmin,
+  getTask,
+  createTask,
+  updateTask,
+  deleteTask,
+} = require("../controllers/task.controller");
 const router = express.Router();
 // router-level middleware, every route below needs a logged in user
 router.use(authenticate);
