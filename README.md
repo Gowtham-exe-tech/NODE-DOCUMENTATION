@@ -1631,3 +1631,1536 @@ res.json(user);
 
 * The `return` prevents execution from continuing after the error response.
 
+# Express Middleware Mechanics & Data Validation
+
+This module is about controlling what happens to an HTTP request before it reaches the actual business logic.
+
+In the Task Manager API, a request should not directly jump from:
+
+Client → Controller → Database
+
+A better structure is:
+
+Client
+  |
+Application Middleware
+  |
+Router Middleware
+  |
+Authentication
+  |
+Validation
+  |
+Controller
+  |
+Service / Database
+  |
+Response
+
+If something goes wrong at any stage, the error should move to one central error handler instead of every route creating its own error response.
+
+The main idea is:
+
+* middleware controls the journey
+* validation controls what data is allowed inside
+* `res.locals` carries request-specific information
+* custom errors describe expected failures
+* centralized error handling controls the final error response
+
+# 1. What Express Middleware Is
+
+Middleware is a function that runs between receiving a request and sending the final response.
+
+A middleware normally receives:
+
+```js
+(req, res, next)
+```
+
+It can:
+
+* inspect the request
+* modify request or response-related data
+* perform authentication
+* validate input
+* log information
+* stop the request and send a response
+* pass control to the next middleware
+* pass an error to the error-handling middleware
+
+A simple mental model is a series of checkpoints.
+
+When a user creates a task:
+
+POST /tasks
+
+Request
+  |
+Is request JSON?
+  |
+Is user authenticated?
+  |
+Is task data valid?
+  |
+Create task
+  |
+Send response
+
+Each checkpoint is middleware.
+
+In the Task Manager API, instead of putting authentication and validation directly inside the controller, I can keep them as separate middleware.
+
+```js
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+```
+This makes the controller responsible mainly for creating the task rather than checking everything that happened before it.
+
+# 2. `req`, `res`, `next`
+
+## `req`
+
+`req` represents the incoming HTTP request.
+
+It contains information sent by the client.
+
+Common properties:
+
+```js
+req.params
+req.query
+req.body
+req.headers
+req.method
+req.path
+``
+For:
+
+POST /tasks/42?notify=true
+
+I might access:
+
+```js
+req.params.id
+req.query.notify
+req.body
+req.headers.authorization
+```
+Example:
+
+```js
+router.get("/tasks/:id", (req, res) => {
+    console.log(req.params.id);
+});
+``````
+## `res`
+
+`res` represents the response that my server sends back.
+
+Common methods:
+
+```js
+res.status()
+res.json()
+res.send()
+res.end()
+```
+Example:
+
+```js
+res.status(201).json({
+    message: "Task created"
+});
+```
+Once I send the response, the request lifecycle normally ends.
+
+## `next`
+
+`next` tells Express to continue to the next middleware.
+
+```js
+function logger(req, res, next) {
+    console.log(req.method, req.path);
+    next();
+}
+```
+Without `next()` or a response, the request can remain hanging.
+
+A middleware has two basic choices:
+
+Do something and continue
+        |
+      next()
+
+OR
+
+Do something and finish
+        |
+      res.json(...)
+
+# 3. `next()` and Middleware Flow
+
+Middleware executes in the order in which Express receives it.
+
+```js
+app.use(first);
+app.use(second);
+app.use(third);
+```
+The flow is:
+
+Request
+  |
+first
+  | next()
+second
+  | next()
+third
+  |
+Route
+
+For the Task Manager API:
+
+```js
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+```
+The execution is:
+
+POST /tasks
+     |
+authenticate
+     | next()
+validate
+     | next()
+createTask
+     |
+response
+
+If `authenticate` rejects the request:
+
+```js
+return next(new AppError("Authentication required", 401));
+```
+then `validate` and `createTask` are not executed.
+
+This is important because validation or database operations should not happen after authentication has already failed.
+
+# Middleware Execution Order
+
+Express does not automatically decide which middleware should run first. The order in which I register middleware determines the execution order.
+
+For example:
+
+```js
+app.use(express.json());
+app.use(requestLogger);
+app.use("/api/tasks", taskRouter);
+```
+The request first passes through:
+
+express.json()
+    |
+requestLogger
+    |
+taskRouter
+
+If I accidentally place the router before a required middleware:
+
+```js
+app.use("/api/tasks", taskRouter);
+app.use(authenticate);
+
+the authentication middleware may never protect those routes because the router can finish the request before Express reaches the later middleware.
+
+A useful rule is:
+
+General middleware
+        |
+Security/authentication
+        |
+Router
+        |
+Route-specific middleware
+        |
+Controller
+        |
+Error handler
+
+The exact structure can vary, but the dependency order matters.
+
+# Application-Level Middleware
+
+Application-level middleware is attached to the main Express application.
+
+```js
+app.use(...)
+```
+These are usually things that apply to many or all routes.
+
+Example:
+
+```js
+app.use(express.json());
+```
+This allows Express to parse JSON request bodies.
+
+For the Task Manager API, I can also have:
+
+```js
+app.use(requestLogger);
+app.use(express.json());
+app.use("/api/tasks", taskRouter);
+app.use(errorHandler);
+```
+A request such as:
+
+POST /api/tasks
+
+passes through application-level middleware before reaching the task router.
+
+Typical uses:
+
+* JSON parsing
+* request logging
+* CORS
+* security headers
+* global request IDs
+* global error handling
+
+I should not put task-specific logic into application middleware if it is only relevant to `/tasks`.
+
+# 6. Router-Level Middleware
+
+Router-level middleware is attached to an Express router.
+
+```js
+const router = express.Router();
+
+router.use(...);
+```
+Suppose my API has:
+
+/api/tasks
+/api/users
+/api/comments
+
+A middleware that applies only to task routes can live inside the task router.
+
+```js
+const taskRouter = express.Router();
+
+taskRouter.use(authenticate);
+
+taskRouter.get("/", getTasks);
+taskRouter.post("/", validate(createTaskSchema), createTask);
+```
+Now authentication applies to the task router.
+
+The structure becomes:
+
+Application
+  |
+/api/tasks router
+  |
+authenticate
+  |
+task route
+
+This is cleaner than putting task-specific middleware globally.
+
+# 7. Route-Level Middleware
+
+Route-level middleware is attached directly to a specific route.
+
+```js
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+```
+Here:
+
+authenticate
+validate
+createTask
+
+are part of that route's pipeline.
+
+This is useful when different routes need different rules.
+
+For example:
+
+```js
+router.get("/", authenticate, getTasks);
+
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+
+router.delete(
+    "/:id",
+    authenticate,
+    authorize("admin"),
+    deleteTask
+);
+```
+The delete operation has an additional authorization requirement.
+
+This avoids putting every rule into every controller.
+
+# 8. Custom Middleware
+
+Custom middleware is middleware that I write for application-specific behavior.
+
+Example authentication middleware:
+
+```js
+function authenticate(req, res, next) {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return next(
+            new AppError("Authentication required", 401)
+        );
+    }
+
+    // verify token
+    next();
+}
+```
+Example request logging middleware:
+
+```js
+function requestLogger(req, res, next) {
+    console.log(`${req.method} ${req.originalUrl}`);
+    next();
+}
+```
+The important design principle is that one middleware should have one clear responsibility.
+
+Bad:
+
+```js
+function everything(req, res, next) {
+    // authenticate
+    // validate
+    // load database user
+    // check permissions
+    // create task
+}
+```
+Better:
+
+authenticate
+     |
+authorize
+     |
+validate
+     |
+controller
+
+This makes individual pieces easier to test and reuse.
+
+# 9. `res.locals`
+
+`res.locals` stores data that belongs to the current request/response cycle.
+
+For example, after authentication I may know which user is making the request.
+
+```js
+res.locals.user = user;
+```
+The next middleware can access:
+
+```js
+res.locals.user
+```
+The controller can also access it.
+
+Example:
+
+```js
+function authenticate(req, res, next) {
+    const user = verifyToken(req.headers.authorization);
+
+    if (!user) {
+        return next(new AppError("Invalid token", 401));
+    }
+
+    res.locals.user = user;
+
+    next();
+}
+```
+Then:
+
+```js
+async function createTask(req, res, next) {
+    const user = res.locals.user;
+
+    const task = await Task.create({
+        title: req.body.title,
+        ownerId: user.id
+    });
+
+    res.status(201).json(task);
+}
+```
+This is useful because the authenticated user is tied to the current request.
+
+I do not want to put request-specific users into a global variable:
+
+```js
+let currentUser;
+```
+That would be unsafe when multiple users make requests concurrently.
+
+# 10. Request-Scoped State
+
+Request-scoped state means data that belongs only to one request.
+
+Suppose two users make requests at almost the same time:
+
+Request A → Gowtham
+Request B → Arun
+
+The server must not accidentally mix their information.
+
+With:
+
+```js
+res.locals.user
+
+each request gets its own state.
+
+Request A
+res.locals.user → Gowtham
+
+Request B
+res.locals.user → Arun
+```
+This is why request-specific data should not be stored in global variables.
+
+For the Task Manager API, request-scoped state could contain:
+
+```js
+res.locals.user
+res.locals.requestId
+res.locals.permissions
+```
+The exact values depend on the application.
+
+# 11. Middleware Chaining
+
+Middleware chaining means multiple middleware functions are executed one after another.
+
+Example:
+
+```js
+router.post(
+    "/",
+    authenticate,
+    authorize("manager"),
+    validate(createTaskSchema),
+    createTask
+);
+```
+The flow is:
+
+Request
+   |
+authenticate
+   |
+authorize
+   |
+validate
+   |
+createTask
+   |
+Response
+
+Each middleware decides whether the request is allowed to continue.
+
+This creates a pipeline where each stage handles one concern.
+
+For example:
+
+Authentication
+    |
+Authorization
+    |
+Validation
+    |
+Business Logic
+
+If authorization fails:
+
+```js
+return next(
+    new AppError("You do not have permission", 403)
+);
+```
+the validation and controller should not execute.
+
+# 12. `next(error)`
+
+`next()` means:
+
+continue normally
+
+`next(error)` means:
+
+something went wrong
+send this error through the error-handling pipeline
+
+Example:
+
+```js
+function authenticate(req, res, next) {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return next(
+            new AppError("Authentication required", 401)
+        );
+    }
+
+    next();
+}
+```
+I should return after calling `next(error)` when there is no more work to perform.
+
+```js
+return next(error);
+```
+This prevents accidental execution of code below it.
+
+The important difference is:
+
+```js
+next();
+```
+means:
+
+continue request
+
+while:
+
+```js
+next(error);
+```
+means:
+
+skip normal middleware and move toward error handling
+
+# 13. Global Error-Handling Middleware
+
+Instead of every controller producing its own error format, I can create one centralized error handler.
+
+Express recognizes error-handling middleware because it has four parameters:
+
+```js
+function errorHandler(err, req, res, next) {
+    // ...
+}
+```
+Example:
+
+```js
+function errorHandler(err, req, res, next) {
+    const statusCode = err.statusCode || 500;
+
+    res.status(statusCode).json({
+        success: false,
+        message: err.message
+    });
+}
+```
+Then register it after the routes:
+
+```js
+app.use("/api/tasks", taskRouter);
+
+app.use(errorHandler);
+```
+A task controller can simply do:
+
+```js
+return next(
+    new AppError("Task not found", 404)
+);
+```
+The global error handler decides how the final response should look.
+
+This gives the API a consistent error format.
+
+Example response:
+
+```json
+{
+    "success": false,
+    "message": "Task not found"
+}
+```
+# 14. `AppError`
+
+JavaScript's normal `Error` tells me that something failed, but for an API I usually also need information such as HTTP status code.
+
+Instead of repeatedly creating objects like:
+
+```js
+const error = new Error("Task not found");
+error.statusCode = 404;
+```
+I can create an application-specific error class.
+
+```js
+class AppError extends Error {
+    constructor(message, statusCode) {
+        super(message);
+
+        this.statusCode = statusCode;
+        this.isOperational = true;
+    }
+}
+```
+Now I can write:
+
+```js
+throw new AppError("Task not found", 404);
+```
+or:
+
+```js
+return next(
+    new AppError("Authentication required", 401)
+);
+```
+The error handler can use:
+
+```js
+err.statusCode
+err.message
+err.isOperational
+```
+This gives my application a consistent way to represent expected API failures.
+
+# 15. Operational vs Unexpected Errors
+
+Not every error means the same thing.
+
+## Operational errors
+
+These are expected situations that the application knows how to handle.
+
+Examples from the Task Manager API:
+
+Task does not exist
+→ 404
+
+Missing authentication
+→ 401
+
+User has no permission
+→ 403
+
+Invalid request data
+→ 400
+
+These can be represented with:
+
+```js
+new AppError("Task not found", 404)
+```
+The server itself is still functioning normally.
+
+## Unexpected errors
+
+These indicate a programming or infrastructure problem.
+
+For example:
+
+```js
+const task = undefined;
+
+console.log(task.owner.id);
+```
+This can produce a runtime error.
+
+Other examples:
+
+* unexpected database failure
+* programming bug
+* incorrect assumption in code
+* unavailable external dependency
+
+I should not expose internal details such as stack traces to normal API clients.
+
+The client might receive:
+
+```json
+{
+    "success": false,
+    "message": "Internal server error"
+}
+```
+while the actual stack trace is logged on the server.
+
+# 16. HTTP Status Codes for Errors
+
+Status codes communicate what happened to the client.
+
+Common ones for the Task Manager API:
+
+400 Bad Request
+401 Unauthorized
+403 Forbidden
+404 Not Found
+409 Conflict
+422 Unprocessable Entity
+500 Internal Server Error
+
+## 400 Bad Request
+
+The request itself is invalid.
+
+Example:
+
+POST /tasks
+
+with malformed or unacceptable request data.
+
+## 401 Unauthorized
+
+The client has not successfully authenticated.
+
+Example:
+
+Authorization header missing
+
+## 403 Forbidden
+
+The user is authenticated but does not have permission.
+
+Example:
+
+normal user trying to perform an admin-only operation
+
+## 404 Not Found
+
+The requested resource does not exist.
+
+Example:
+
+GET /tasks/9999
+
+when task `9999` does not exist.
+
+## 409 Conflict
+
+The request conflicts with the current state.
+
+Example:
+
+trying to create a task with a unique identifier that already exists
+
+## 422 Unprocessable Entity
+
+The request has the correct general structure, but the supplied values fail semantic validation.
+
+The exact use of `400` vs `422` should be consistent with the API's chosen convention.
+
+## 500 Internal Server Error
+
+Something unexpected happened on the server.
+
+I should not use `500` for normal client mistakes.
+
+# 17. Async Error Handling
+
+Controllers often perform asynchronous operations:
+
+```js
+async function getTask(req, res, next) {
+    const task = await Task.findById(req.params.id);
+
+    res.json(task);
+}
+```
+But the database operation can fail.
+
+For example:
+
+```js
+async function getTask(req, res, next) {
+    try {
+        const task = await Task.findById(req.params.id);
+
+        if (!task) {
+            return next(
+                new AppError("Task not found", 404)
+            );
+        }
+
+        res.json(task);
+    } catch (error) {
+        next(error);
+    }
+}
+```
+The important part is that the asynchronous failure eventually reaches the centralized error handler.
+
+A reusable async wrapper can reduce repeated `try/catch` blocks:
+
+```js
+const asyncHandler = (fn) => {
+    return (req, res, next) => {
+        Promise.resolve(fn(req, res, next))
+            .catch(next);
+    };
+};
+```
+Then:
+
+```js
+router.get(
+    "/:id",
+    asyncHandler(getTask)
+);
+```
+Now unexpected asynchronous errors are forwarded to:
+
+asyncHandler
+    |
+next(error)
+    |
+global errorHandler
+
+Whether I use a wrapper depends on the Express version and project style, but the underlying principle stays the same: async failures must reach the centralized error pipeline.
+
+# 18. Why Input Validation Is Necessary
+
+Anything coming from the client should be treated as untrusted input.
+
+Suppose my Task Manager expects:
+
+```json
+{
+    "title": "Finish API module",
+    "description": "Complete middleware implementation",
+    "priority": "high"
+}
+```
+A client could send:
+
+```json
+{
+    "title": 123,
+    "description": true,
+    "priority": "whatever"
+}
+```
+If I directly use this data:
+
+```js
+const task = await Task.create(req.body);
+```
+I am trusting the client to follow my API contract.
+
+That is a mistake.
+
+Validation creates a boundary:
+
+Untrusted input
+      |
+Validation
+      |
+Trusted application data
+      |
+Business logic
+
+Validation should happen before the controller performs important business operations.
+
+For the Task Manager API:
+
+POST /tasks
+    |
+Authentication
+    |
+Validate body
+    |
+Controller
+    |
+Database
+
+This prevents invalid data from reaching deeper layers.
+
+# 19. Zod / Joi Schemas
+
+A schema describes what valid data should look like.
+
+For example, using Zod:
+
+```js
+import { z } from "zod";
+
+const createTaskSchema = z.object({
+    title: z.string().min(3).max(100),
+    description: z.string().max(500).optional(),
+    priority: z.enum(["low", "medium", "high"])
+});
+```
+This creates an explicit API contract.
+
+Instead of explaining separately:
+
+title must be a string
+title must have at least 3 characters
+priority must be low/medium/high
+
+the schema becomes the executable definition.
+
+The same idea can be implemented using Joi.
+
+The important concept is not memorizing the library API. The important concept is:
+
+Define expected shape
+        |
+Validate incoming data
+        |
+Reject invalid data
+        |
+Allow valid data into business logic
+
+# 20. Required / Optional Fields
+
+Suppose creating a task requires:
+
+title
+priority
+
+but description is optional.
+
+A Zod schema can express that:
+
+```js
+const createTaskSchema = z.object({
+    title: z.string(),
+    priority: z.enum(["low", "medium", "high"]),
+    description: z.string().optional()
+});
+```
+Now:
+
+```json
+{
+    "title": "Complete API",
+    "priority": "high"
+}
+```
+is valid.
+
+But:
+
+```json
+{
+    "priority": "high"
+}
+```
+fails because `title` is required.
+
+This is useful because different operations may have different schemas.
+
+For example:
+
+Create Task
+→ title required
+
+Update Task
+→ title optional
+
+So I should not blindly reuse one schema for every operation.
+
+# 21. Type Validation
+
+The schema can verify that values have the expected types.
+
+For example:
+
+```js
+const schema = z.object({
+    title: z.string(),
+    estimatedHours: z.number(),
+    completed: z.boolean()
+});
+```
+Valid:
+
+```json
+{
+    "title": "Build middleware",
+    "estimatedHours": 4,
+    "completed": false
+}
+```
+Invalid:
+
+```json
+{
+    "title": 123,
+    "estimatedHours": "four",
+    "completed": "no"
+}
+```
+This protects the controller from making assumptions such as:
+
+```js
+req.body.estimatedHours * 2
+```
+when the client actually supplied:
+
+"four"
+
+Validation establishes the expected type before business logic uses the value.
+
+# 22. String / Number / Email Validation
+
+Validation is not limited to checking types.
+
+I can check constraints.
+
+Example:
+
+```js
+const userSchema = z.object({
+    name: z.string().min(2).max(50),
+    age: z.number().int().min(18).max(100),
+    email: z.string().email()
+});
+```
+Here:
+
+name
+→ string
+→ 2–50 characters
+
+age
+→ number
+→ integer
+→ 18–100
+
+email
+→ valid email format
+
+For the Task Manager API, similar rules can be applied to:
+
+task title
+task description
+priority
+due date
+estimated hours
+
+The important thing is to validate according to the actual business rule, not just add random restrictions.
+
+# 23. Nested Object / Array Validation
+
+Real APIs rarely contain only flat data.
+
+For example, a task could contain labels:
+
+```json
+{
+    "title": "Build API",
+    "labels": [
+        {
+            "name": "backend",
+            "color": "blue"
+        },
+        {
+            "name": "express",
+            "color": "green"
+        }
+    ]
+}
+```
+The schema can describe the nested structure.
+
+```js
+const labelSchema = z.object({
+    name: z.string().min(1),
+    color: z.string().min(1)
+});
+
+const createTaskSchema = z.object({
+    title: z.string().min(3),
+    labels: z.array(labelSchema).optional()
+});
+```
+Now validation happens recursively.
+
+The API can verify:
+
+labels
+  |
+array
+  |
+each item
+  |
+object
+  |
+name + color
+
+This becomes especially important when API payloads become more complex.
+
+# 24. Validation Middleware
+
+Instead of writing validation directly inside every controller, I can create reusable middleware.
+
+Example:
+
+```js
+function validate(schema) {
+    return (req, res, next) => {
+        const result = schema.safeParse(req.body);
+
+        if (!result.success) {
+            return next(
+                new AppError(
+                    "Invalid request data",
+                    400
+                )
+            );
+        }
+
+        res.locals.validatedBody = result.data;
+
+        next();
+    };
+}
+```
+Then my route becomes:
+
+```js
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+```
+The controller does not need to repeat validation logic.
+
+A more complete implementation can preserve structured validation details:
+
+```js
+function validate(schema) {
+    return (req, res, next) => {
+        const result = schema.safeParse(req.body);
+
+        if (!result.success) {
+            const error = new AppError(
+                "Validation failed",
+                400
+            );
+
+            error.details = result.error.issues;
+
+            return next(error);
+        }
+
+        res.locals.validatedBody = result.data;
+
+        next();
+    };
+}
+```
+Now the global error handler can decide how much validation information should be returned.
+
+# 25. Connecting Validation → Controller → Error Handler
+
+This is the most important part of the module.
+
+The complete Task Manager flow can look like this:
+
+```js
+router.post(
+    "/",
+    authenticate,
+    validate(createTaskSchema),
+    createTask
+);
+```
+## Step 1 — Authentication
+
+```js
+function authenticate(req, res, next) {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return next(
+            new AppError("Authentication required", 401)
+        );
+    }
+
+    const user = verifyToken(token);
+
+    if (!user) {
+        return next(
+            new AppError("Invalid token", 401)
+        );
+    }
+
+    res.locals.user = user;
+
+    next();
+}
+```
+The authenticated user is now available to later middleware.
+
+res.locals.user
+
+## Step 2 — Validation
+
+```js
+const createTaskSchema = z.object({
+    title: z.string().min(3).max(100),
+    description: z.string().max(500).optional(),
+    priority: z.enum(["low", "medium", "high"])
+});
+```
+Validation middleware:
+
+```js
+function validate(schema) {
+    return (req, res, next) => {
+        const result = schema.safeParse(req.body);
+
+        if (!result.success) {
+            const error = new AppError(
+                "Validation failed",
+                400
+            );
+
+            error.details = result.error.issues;
+
+            return next(error);
+        }
+
+        res.locals.validatedBody = result.data;
+
+        next();
+    };
+}
+```
+Now only validated data moves forward.
+
+## Step 3 — Controller
+
+The controller can focus on the actual task creation.
+
+```js
+async function createTask(req, res, next) {
+    try {
+        const user = res.locals.user;
+        const data = res.locals.validatedBody;
+
+        const task = await Task.create({
+            ...data,
+            ownerId: user.id
+        });
+
+        res.status(201).json({
+            success: true,
+            data: task
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+```
+Notice that the controller does not need to ask:
+
+Is the user authenticated?
+Is title a string?
+Is priority valid?
+
+Those responsibilities already belong to earlier stages.
+
+## Step 4 — Error Handler
+
+Finally:
+
+```js
+function errorHandler(err, req, res, next) {
+    const statusCode = err.statusCode || 500;
+
+    res.status(statusCode).json({
+        success: false,
+        message:
+            statusCode === 500
+                ? "Internal server error"
+                : err.message,
+        ...(err.details && {
+            details: err.details
+        })
+    });
+}
+```
+Registered once:
+
+```js
+app.use(errorHandler);
+```
+The complete flow is now:
+
+POST /api/tasks
+        |
+authenticate
+        |
+   valid user?
+     /     \
+   no       yes
+   |         |
+401       validate
+             |
+        valid payload?
+          /       \
+        no         yes
+        |           |
+      400        createTask
+                    |
+                database
+                    |
+                  201
+
+Any unexpected error
+        |
+    next(error)
+        |
+ global errorHandler
+        |
+       500
+
+# Putting the POC Together
+
+A clean Task Manager API structure could look like:
+
+task-manager/
+│
+├── src/
+│   ├── app.js
+│   │
+│   ├── routes/
+│   │   └── task.routes.js
+│   │
+│   ├── controllers/
+│   │   └── task.controller.js
+│   │
+│   ├── middleware/
+│   │   ├── authenticate.js
+│   │   ├── validate.js
+│   │   └── errorHandler.js
+│   │
+│   ├── schemas/
+│   │   └── task.schema.js
+│   │
+│   ├── errors/
+│   │   └── AppError.js
+│   │
+│   └── models/
+│       └── task.model.js
+│
+└── package.json
+
+The important separation is:
+
+Route
+→ decides which middleware pipeline is required
+
+Middleware
+→ handles cross-cutting request concerns
+
+Schema
+→ defines valid input
+
+Controller
+→ handles the actual request operation
+
+AppError
+→ represents expected application failures
+
+Error Handler
+→ converts errors into HTTP responses
+
+# The Mental Model to Remember
+
+Think of an Express API as a controlled pipeline.
+
+                 REQUEST
+                    |
+        ┌─────────────────────┐
+        │ Application          │
+        │ Middleware           │
+        └──────────┬──────────┘
+                   |
+        ┌─────────────────────┐
+        │ Router Middleware    │
+        └──────────┬──────────┘
+                   |
+        ┌─────────────────────┐
+        │ Authentication       │
+        └──────────┬──────────┘
+                   |
+        ┌─────────────────────┐
+        │ Validation           │
+        └──────────┬──────────┘
+                   |
+        ┌─────────────────────┐
+        │ Controller           │
+        └──────────┬──────────┘
+                   |
+        ┌─────────────────────┐
+        │ Database / Service   │
+        └──────────┬──────────┘
+                   |
+                RESPONSE
+
+       Any stage can produce:
+                   |
+              next(error)
+                   |
+        ┌─────────────────────┐
+        │ Global Error Handler│
+        └──────────┬──────────┘
+                   |
+              ERROR RESPONSE
+
+The key implementation rule is:
+
+Don't make the controller responsible for everything.
+
+Instead:
+
+Authentication → authenticate middleware
+Authorization  → authorize middleware
+Validation     → validation middleware
+Request state  → res.locals
+Business logic → controller/service
+Expected errors → AppError
+Error response → global error handler
+
+That separation is what makes the Task Manager POC start looking like an actual backend architecture rather than a collection of routes.
