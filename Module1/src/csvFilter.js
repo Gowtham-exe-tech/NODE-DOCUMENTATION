@@ -12,8 +12,7 @@ function parseCsvLine(line) {
       if (insideQuotes && line[i + 1] === '"') {
         currentValue += '"';
         i++;
-      } 
-      else {
+      } else {
         insideQuotes = !insideQuotes;
       }
       continue;
@@ -39,7 +38,7 @@ function escapeCsvField(value) {
   return value;
 }
 
-export function createCsvFilter(filterValue, onRecord) {
+export function createCsvFilter(filterValue, statistics) {
   let remaining = "";
   let headers = null;
   let paymentStatusIndex = -1;
@@ -47,6 +46,11 @@ export function createCsvFilter(filterValue, onRecord) {
   return new Transform({
     transform(chunk, encoding, callback) {
       try {
+        
+        console.log(
+          "Chunk size:",
+          (Buffer.byteLength(chunk, "utf8") / 1024).toFixed(2),"KB");
+
         remaining += chunk.toString();
         const lines = remaining.split("\n");
         remaining = lines.pop();
@@ -86,15 +90,15 @@ export function createCsvFilter(filterValue, onRecord) {
 
           const paymentStatus = columns[paymentStatusIndex].trim();
 
-          onRecord();
+          statistics.totalRecords++;
 
           if (paymentStatus === filterValue) {
+            statistics.matchedRecords++;
             this.push(columns.map(escapeCsvField).join(",") + "\n");
           }
         }
         callback();
-      } 
-      catch (error) {
+      } catch (error) {
         callback(error);
       }
     },
@@ -126,14 +130,14 @@ export function createCsvFilter(filterValue, onRecord) {
 
         const paymentStatus = columns[paymentStatusIndex].trim();
 
-        onRecord();
+        statistics.totalRecords++;
 
         if (paymentStatus === filterValue) {
+          statistics.matchedRecords++;
           this.push(columns.map(escapeCsvField).join(",") + "\n");
         }
         callback();
-      } 
-      catch (error) {
+      } catch (error) {
         callback(error);
       }
     },

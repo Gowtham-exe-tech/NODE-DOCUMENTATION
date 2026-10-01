@@ -20,15 +20,12 @@ try {
         outputFile,
         filterValue
     );
-
-    console.log("");
     console.log("Processing completed.");
     console.log("Total records:", result.totalRecords);
     console.log("Matched records:", result.matchedRecords);
     console.log("Peak memory:", result.peakMemoryMB + " MB");
-} catch (error) {
-    console.error("");
-    console.error("Processing failed:", error.message);
 
+} catch (error) {
+    console.error("Processing failed:", error.message);
     process.exit(1);
 }
