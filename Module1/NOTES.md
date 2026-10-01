@@ -10,7 +10,7 @@
 
 *Read a csv file, find records that match our condition, lastly write that data into another file .txt.*
 
-Requirement: csv file is huge, but process must stay below 50MB of RAM usage.
+Requirement: csv file is huge, but node.js process must stay below 50MB of RAM usage.
 
 ## Test I did:
 

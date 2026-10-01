@@ -1631,38 +1631,3 @@ res.json(user);
 
 * The `return` prevents execution from continuing after the error response.
 
-## Module 2 target
-
-* By the end of this module, you should be able to build an Express API with:
-  * environment-based configuration
-  * JSON request parsing
-  * GET, POST, PUT, PATCH, and DELETE routes
-  * meaningful HTTP status codes
-  * URL parameters
-  * query parameters
-  * JSON request bodies
-  * versioned API paths
-  * separate routers for different resources
-  * a clean application/server separation
-
-* The final mental model should be:
-
-```text
-Client
-  ↓
-HTTP Method + URL + Query + Body
-  ↓
-Express
-  ↓
-Middleware
-  ↓
-Router
-  ↓
-Controller / Business Logic
-  ↓
-Database
-  ↓
-HTTP Status + JSON Response
-  ↓
-Client
-```
