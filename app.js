@@ -177,5 +177,12 @@
             
         
             
+// creating a server using http module
 
+const http = require("http");
 
+const Server = http.createServer(req, res, ()=>{
+    console.log("Server ended.....")
+});
+
+Server.listen(3000);

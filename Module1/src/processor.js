@@ -26,13 +26,13 @@ export async function processFile(inputFile, outputFile, filterValue) {
 
     const memoryMonitor = setInterval(() => {
           const memoryUsage = process.memoryUsage(); // to get memory statistics
-//        console.log({
-              //   rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
-              //   heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
-              //   heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
-              //   external: `${(memoryUsage.external / 1024 / 1024).toFixed(2)} MB`,
-              //   arrayBuffers: `${(memoryUsage.arrayBuffers / 1024 / 1024).toFixed(2)} MB`,
-//        });
+       console.log({
+                rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+                heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
+                heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+                external: `${(memoryUsage.external / 1024 / 1024).toFixed(2)} MB`,
+                arrayBuffers: `${(memoryUsage.arrayBuffers / 1024 / 1024).toFixed(2)} MB`,
+       });
           const currentMemoryMB = memoryUsage.rss / 1024 / 1024;
           peakMemoryMB = Math.max(peakMemoryMB, currentMemoryMB);
     }, 100);
