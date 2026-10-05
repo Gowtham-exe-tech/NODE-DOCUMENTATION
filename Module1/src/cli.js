@@ -12,21 +12,30 @@ if (!inputFile || !outputFile || !filterValue) {
     process.exit(1); //"1" conventially means something wrong(Failure), "0" represents successful termination(success- clean exit)
 }
 
+
+//initial memory usage 
+const startupRSSMB = process.memoryUsage().rss / 1024 / 1024;
+
+
 console.log("Input:", inputFile);
 console.log("Output:", outputFile);
 console.log("Filter:", filterValue);
 
 try {
     //calling processFile()
+    // startupRSSMB is passed so processor.js can calculate
+    // how much additional RSS the processing used
     const result = await processFile(
         inputFile,
         outputFile,
-        filterValue
+        filterValue,
+        startupRSSMB
     );
-    console.log("Processing completed.");
     console.log("Total records:", result.totalRecords);
     console.log("Matched records:", result.matchedRecords);
-    console.log("Peak memory:", result.peakMemoryMB + " MB");
+    console.log("Startup RSS:", result.startupRSSMB + " MB");
+    console.log("Peak RSS:", result.peakRSSMB + " MB");
+    console.log("Processing RSS increase:", result.processingRSSIncreaseMB + " MB");
 
 } catch (error) {
     console.error("Processing failed:", error.message);

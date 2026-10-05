@@ -6841,4 +6841,1439 @@ Result
 HTTP response
 ```
 
-That is the real purpose of Module 4.
+# Module 5: Advanced Authentication, Security & RBAC
+
+Authentication and authorization are two different security responsibilities in an API.
+
+- Authentication checks **who the requester is**.
+- Authorization checks **what that authenticated requester is allowed to do**.
+- A secure request normally passes through multiple layers instead of depending on one security mechanism.
+- Typical flow:
+
+  `Client → Security middleware → Authentication → Authorization → Route handler → Response`
+
+## Password Hashing
+
+- User passwords should never be stored directly in the database.
+- Storing a password such as `Admin@123` means anyone who gets database access can immediately see the actual password.
+- Password hashing converts the original password into a one-way hash.
+
+  `Admin@123 → password hashing algorithm → $2b$12$...`
+
+- The original password is not stored in the database.
+- During login, the password entered by the user is compared against the stored hash.
+- The application does not need to convert the hash back into the original password.
+- Hashing is different from encryption:
+  - Hashing is intended for one-way verification.
+  - Encryption is designed so that encrypted data can later be decrypted with the correct key.
+- Passwords normally require hashing, not encryption.
+- Password hashing algorithms are intentionally slower than normal general-purpose hashes.
+- A slow password hash makes large numbers of password guesses more expensive for an attacker.
+- Common password hashing algorithms in Node.js applications include bcrypt and Argon2.
+- Password hashing should happen on the server before the password is stored.
+- The plain password should not be logged, returned in an API response, or stored in application data after it is no longer needed.
+
+## bcrypt
+
+- bcrypt is a password hashing algorithm commonly used in Node.js applications.
+- It is designed specifically for password storage rather than general-purpose data hashing.
+- bcrypt uses a configurable cost factor, often called salt rounds.
+- A higher cost means more computation is required for each hash and verification operation.
+- This additional computation is useful because password attacks may require trying a large number of guesses.
+- Example:
+
+```js
+import bcrypt from "bcrypt";
+
+const passwordHash = await bcrypt.hash(password, 12);
+```
+
+- The `12` represents the cost setting used for this hash.
+- bcrypt also generates and handles the salt as part of its normal hashing process.
+- A salt is a random value added to the password hashing process.
+- Different users can therefore have different hashes even when they use the same password.
+- Password verification is performed using `bcrypt.compare()`.
+
+```js
+const isPasswordValid = await bcrypt.compare(
+  password,
+  user.passwordHash
+);
+```
+
+- `true` means the entered password matches the stored hash.
+- `false` means the password is incorrect.
+- The application should store the result of `bcrypt.hash()` in a field such as `passwordHash`.
+- The original password should never be stored beside it.
+- bcrypt is used mainly during:
+  - User registration
+  - Password changes
+  - Password reset flows
+  - Login verification
+
+## Argon2
+
+- Argon2 is another password hashing algorithm designed to make password cracking expensive.
+- Argon2 can deliberately use CPU and memory resources during hashing.
+- This makes large-scale password guessing more expensive for attackers.
+- Argon2 is commonly considered a modern choice for password hashing.
+- Example:
+
+```js
+import argon2 from "argon2";
+
+const passwordHash = await argon2.hash(password);
+```
+
+- Password verification:
+
+```js
+const isPasswordValid = await argon2.verify(
+  user.passwordHash,
+  password
+);
+```
+
+- bcrypt and Argon2 solve the same general problem: securely storing passwords so the original password is not stored.
+- A project should normally choose one suitable password hashing algorithm rather than hashing the same password with several algorithms unnecessarily.
+- For the practice project, bcrypt can be used to understand the complete registration and login flow.
+
+## Password Hashing Flow
+
+- Registration starts with the plain password sent over an HTTPS connection.
+- The server receives the password.
+- The server validates the input.
+- The server passes the password to bcrypt or Argon2.
+- The hashing algorithm generates a password hash.
+- Only the hash is stored.
+
+```text
+Client
+  ↓
+password: "Admin@123"
+  ↓
+Server
+  ↓
+bcrypt.hash()
+  ↓
+passwordHash
+  ↓
+Database
+```
+
+- Login follows a different path.
+- The user sends the email and password.
+- The server finds the user record.
+- The server retrieves the stored password hash.
+- `bcrypt.compare()` checks the supplied password against that hash.
+- If the comparison succeeds, authentication can continue.
+- If the comparison fails, the server rejects the login.
+
+```text
+Client
+  ↓
+email + password
+  ↓
+Find user
+  ↓
+bcrypt.compare()
+  ↓
+Password matches?
+  ├── No  → 401
+  └── Yes → Create access token
+```
+
+## User Record
+
+- A user record should contain information needed for authentication and authorization.
+- Example:
+
+```js
+{
+  id: "u101",
+  name: "Gowtham",
+  email: "gowtham@example.com",
+  passwordHash: "$2b$12$...",
+  role: "user"
+}
+```
+
+- `id` identifies the user.
+- `email` can be used as the login identifier.
+- `passwordHash` contains the hashed password.
+- `role` identifies the user's authorization role.
+- The password itself should not exist in the stored user object.
+- The API response should also avoid returning `passwordHash`.
+
+## Registration
+
+- Registration creates a new user account.
+- A typical endpoint is:
+
+```text
+POST /api/v1/auth/register
+```
+
+- Example request:
+
+```json
+{
+  "name": "Gowtham",
+  "email": "gowtham@example.com",
+  "password": "StrongPassword@123"
+}
+```
+
+- The server should not immediately insert this request into the database.
+- The registration process normally performs these steps:
+  - Validate required fields.
+  - Validate email format.
+  - Validate password requirements.
+  - Check whether the email is already registered.
+  - Hash the password.
+  - Create the user record.
+  - Assign the appropriate default role.
+  - Store the user.
+  - Return safe user information.
+- A normal registration endpoint should not allow the client to choose `admin` as the role.
+- Otherwise, a requester could attempt:
+
+```json
+{
+  "name": "Attacker",
+  "email": "attacker@example.com",
+  "password": "Password123",
+  "role": "admin"
+}
+```
+
+- The server should decide the initial role.
+
+```js
+const user = {
+  id: crypto.randomUUID(),
+  name,
+  email,
+  passwordHash,
+  role: "user"
+};
+```
+
+- Admin users should normally be created through a controlled administrative process, seed process, database operation, or separate protected workflow.
+
+## Login
+
+- Login verifies the identity of an existing user.
+- A typical endpoint is:
+
+```text
+POST /api/v1/auth/login
+```
+
+- Example request:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "Admin@123"
+}
+```
+
+- Login normally performs these steps:
+  - Read email and password.
+  - Find the user using the email.
+  - Compare the supplied password with the stored password hash.
+  - Reject the request if the credentials are invalid.
+  - Create a signed access token if the credentials are valid.
+  - Return the access token to the client.
+- A useful security practice is returning the same general error for an unknown email and a wrong password.
+
+```json
+{
+  "message": "Invalid email or password"
+}
+```
+
+- This reduces unnecessary information about which accounts exist.
+
+## JSON Web Token (JWT)
+
+- JWT is a token format commonly used to represent authenticated information between a client and server.
+- A JWT is commonly used for stateless authentication.
+- After successful login, the server creates a signed token.
+- The client sends that token with later protected requests.
+- The server verifies the token instead of requiring the user to send the password on every request.
+- A JWT normally has three sections:
+
+```text
+Header.Payload.Signature
+```
+
+- The three sections are separated by dots.
+- Example structure:
+
+```text
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+.
+eyJzdWIiOiJ1MTAxIiwicm9sZSI6ImFkbWluIn0
+.
+signature
+```
+
+- JWT is useful for APIs because the server can validate the token and obtain the user identity from the token claims.
+- JWT itself does not automatically make the payload secret.
+- The payload is encoded, not normally encrypted.
+- Sensitive information such as passwords, credit-card details, or private secrets should not be placed inside a normal signed JWT.
+
+## JWT Header
+
+- The JWT header describes the token.
+- A typical header contains:
+
+```json
+{
+  "alg": "HS256",
+  "typ": "JWT"
+}
+```
+
+- `alg` identifies the signing algorithm.
+- `typ` identifies the token type.
+- The header becomes part of the signed token.
+- The application should explicitly configure and validate the algorithms appropriate for its authentication design rather than blindly accepting unexpected algorithms.
+
+## JWT Payload
+
+- The payload contains claims about the token.
+- Example:
+
+```json
+{
+  "sub": "u102",
+  "role": "admin"
+}
+```
+
+- `sub` means subject and is commonly used for the user's unique ID.
+- `role` is an application-specific claim used for authorization in this practice project.
+- Standard claims can include:
+  - `sub` → subject/user identifier
+  - `iat` → issued-at time
+  - `exp` → expiration time
+  - `iss` → issuer
+  - `aud` → intended audience
+- A token should contain only information needed by the authentication system.
+- Keeping the payload small reduces unnecessary data being transmitted with every request.
+- The client can read the encoded payload, so the payload must not be treated as a secure place for secrets.
+
+## JWT Signature
+
+- The signature allows the server to detect whether the token has been modified.
+- With a symmetric signing algorithm such as HS256, the server uses a secret key to sign the token.
+- Conceptually:
+
+```text
+Header + Payload + Secret
+        ↓
+     Signature
+```
+
+- When a request arrives, the server verifies the token using the appropriate verification key.
+- If the payload was modified, the signature no longer matches.
+- Example:
+
+```text
+Original:
+role = user
+
+Modified:
+role = admin
+```
+
+- The attacker cannot simply change the payload and create a valid signature without the signing key.
+- JWT verification therefore provides integrity and authenticity of the signed claims.
+- JWT signing does not mean the payload is encrypted.
+
+## JWT Secret Key
+
+- The JWT signing secret is a sensitive server-side value.
+- It should not be committed to Git.
+- It should not be written directly into source code.
+- Example `.env`:
+
+```env
+JWT_SECRET=long-random-secret-value
+JWT_EXPIRES_IN=15m
+```
+
+- Application code can read it through `process.env`.
+
+```js
+const JWT_SECRET = process.env.JWT_SECRET;
+```
+
+- `.env` should be included in `.gitignore`.
+
+```text
+.env
+node_modules/
+```
+
+- A production environment should store secrets using the deployment platform's secret/environment configuration or a dedicated secret-management system.
+- If the signing secret is exposed, an attacker may be able to create valid tokens, so secret protection is critical.
+
+## JWT Expiration
+
+- Access tokens should normally have a limited lifetime.
+- Example:
+
+```js
+const token = jwt.sign(
+  {
+    sub: user.id,
+    role: user.role
+  },
+  process.env.JWT_SECRET,
+  {
+    expiresIn: "15m"
+  }
+);
+```
+
+- `expiresIn` adds an expiration time to the token.
+- After the expiration time, `jwt.verify()` rejects the token.
+- Short-lived access tokens reduce the useful lifetime of a stolen token.
+- A token with no expiration can remain usable indefinitely unless another mechanism invalidates it.
+- Common access-token lifetimes can be measured in minutes rather than days.
+- The correct lifetime depends on the application's security requirements.
+- A real system may also use refresh tokens when users need longer sessions without making access tokens long-lived.
+
+## Stateless Authentication
+
+- JWT-based authentication can be stateless because the server does not need to keep a server-side session object for every access token.
+- The token contains signed claims such as the user ID and role.
+- Every protected request carries the token.
+- The server verifies the token and obtains the identity information from it.
+
+```text
+Login
+  ↓
+Server creates JWT
+  ↓
+Client stores token
+  ↓
+Request 1 → JWT → verify
+Request 2 → JWT → verify
+Request 3 → JWT → verify
+```
+
+- The server does not need to look up a session record for every request just to determine whether the token itself is valid.
+- Stateless does not mean "no database is ever used."
+- The application can still query the database for user details, permissions, product ownership, account status, or other business data.
+- Stateless JWT authentication mainly means the authentication state is carried by the signed token instead of a server-side session object.
+
+## Access Token
+
+- An access token represents permission to access protected API resources for a limited period.
+- A login endpoint can return:
+
+```json
+{
+  "accessToken": "eyJhbGciOi..."
+}
+```
+
+- The client sends the token with protected requests.
+
+```http
+Authorization: Bearer eyJhbGciOi...
+```
+
+- The token should be treated as sensitive because possession of a valid token may allow access to the associated account.
+- Access tokens should have an appropriate expiration time.
+- Token storage on browser applications requires careful consideration because token theft can result in account compromise.
+
+## Authorization Header
+
+- Protected API requests commonly send JWT access tokens through the HTTP `Authorization` header.
+- Standard format:
+
+```http
+Authorization: Bearer <access-token>
+```
+
+- `Bearer` indicates that possession of the token is being used as the credential.
+- The server reads:
+
+```js
+const authHeader = req.headers.authorization;
+```
+
+- The header is then split into its scheme and token.
+
+```js
+const [scheme, token] = authHeader.split(" ");
+```
+
+- The server should confirm that the scheme is `Bearer` and that a token exists.
+- Missing or malformed authentication headers should result in an authentication failure.
+
+## JWT Authentication Middleware
+
+- Authentication middleware runs before protected route handlers.
+- Its responsibility is to determine whether the request contains a valid access token.
+- Typical process:
+
+```text
+Request
+  ↓
+Read Authorization header
+  ↓
+Check Bearer format
+  ↓
+Extract token
+  ↓
+Verify signature
+  ↓
+Check expiration and claims
+  ↓
+Attach verified payload to req.user
+  ↓
+next()
+```
+
+- Example:
+
+```js
+import jwt from "jsonwebtoken";
+
+export function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({
+      message: "Authentication required"
+    });
+  }
+
+  const [scheme, token] = authHeader.split(" ");
+
+  if (scheme !== "Bearer" || !token) {
+    return res.status(401).json({
+      message: "Invalid authorization format"
+    });
+  }
+
+  try {
+    const payload = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
+
+    req.user = payload;
+
+    next();
+  } catch {
+    return res.status(401).json({
+      message: "Invalid or expired token"
+    });
+  }
+}
+```
+
+- `jwt.verify()` performs signature and registered-claim verification.
+- If verification succeeds, the decoded verified payload can be attached to `req.user`.
+- Route handlers can then use `req.user.sub` to identify the authenticated user.
+- Route handlers can use `req.user.role` for the authorization decision.
+- If verification fails, `next()` should not be called.
+- This prevents unauthenticated requests from reaching the protected route handler.
+
+## JWT Verification vs JWT Decryption
+
+- JWT authentication is commonly described as token verification, not token decryption.
+- A signed JWT payload can be decoded without the signing secret.
+- The signing secret is required to verify that the token was actually signed by the trusted server and has not been modified.
+- `jwt.verify()` checks the token's signature and relevant claims.
+- Therefore:
+
+```text
+Decode → read encoded payload
+Verify → prove the token is valid and trusted
+Decrypt → recover encrypted data
+```
+
+- A normal signed JWT does not perform encryption of its payload.
+
+## Role-Based Access Control (RBAC)
+
+- RBAC stands for Role-Based Access Control.
+- RBAC assigns permissions based on roles rather than writing separate authorization logic for every individual user.
+- Example roles:
+
+```text
+user
+manager
+admin
+```
+
+- Example permissions:
+
+```text
+user
+→ view products
+
+manager
+→ view products
+→ create products
+→ update products
+
+admin
+→ view products
+→ create products
+→ update products
+→ delete products
+```
+
+- RBAC is useful when many users share the same permission rules.
+- Instead of checking whether a particular email address is allowed to delete a product, the application checks the user's role.
+- Example:
+
+```js
+if (req.user.role === "admin") {
+  // allow deletion
+}
+```
+
+- A reusable middleware is better than repeating this condition in every route.
+
+## Authorization Middleware
+
+- Authorization middleware runs after authentication.
+- Authentication establishes a trusted identity.
+- Authorization uses that identity to decide whether the requested operation is allowed.
+- Example middleware:
+
+```js
+export function requireRole(requiredRole) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Authentication required"
+      });
+    }
+
+    if (req.user.role !== requiredRole) {
+      return res.status(403).json({
+        message: "Insufficient permissions"
+      });
+    }
+
+    next();
+  };
+}
+```
+
+- `requireRole("admin")` creates an authorization middleware that only allows admin users.
+- Example route:
+
+```js
+router.delete(
+  "/products/:id",
+  authenticateToken,
+  requireRole("admin"),
+  deleteProduct
+);
+```
+
+- The middleware order matters.
+- `authenticateToken` must run first because `requireRole()` needs `req.user`.
+- If authentication fails, the request stops before authorization.
+- If authentication succeeds but the role is not allowed, the request stops with `403`.
+
+## 401 Unauthorized vs 403 Forbidden
+
+- `401 Unauthorized` is used when the request has not been successfully authenticated.
+- Common examples:
+  - No access token.
+  - Malformed access token.
+  - Invalid signature.
+  - Expired token.
+  - Invalid login credentials.
+- `403 Forbidden` is used when authentication succeeded but the authenticated user is not allowed to perform the operation.
+- Example:
+
+```text
+No token
+→ 401
+
+Invalid token
+→ 401
+
+Valid token + role=user
+→ 403 for admin-only operation
+
+Valid token + role=admin
+→ operation allowed
+```
+
+- Keeping these responses conceptually separate makes the API behavior easier to understand and debug.
+
+## Admin-Only Product Deletion
+
+- Product deletion is a useful RBAC example because it represents a destructive operation.
+- Route:
+
+```text
+DELETE /api/v1/products/:id
+```
+
+- The route should not directly trust a role supplied by the client.
+- The role should come from authenticated server-verified information.
+
+```text
+Client
+  ↓
+Authorization: Bearer <token>
+  ↓
+JWT verification
+  ↓
+req.user = verified payload
+  ↓
+role check
+  ↓
+Product deletion
+```
+
+- Example:
+
+```js
+router.delete(
+  "/products/:id",
+  authenticateToken,
+  requireRole("admin"),
+  deleteProduct
+);
+```
+
+- A normal user with a valid token reaches the authorization middleware but receives `403`.
+- An admin with a valid token passes authorization and reaches the product deletion handler.
+- A request without a valid token receives `401` before the role check.
+
+## Do Not Trust Client-Supplied Roles
+
+- A role sent in the request body is controlled by the client.
+
+```json
+{
+  "role": "admin"
+}
+```
+
+- Using this value for authorization would allow the client to claim an administrator role.
+- This is incorrect:
+
+```js
+if (req.body.role === "admin") {
+  deleteProduct();
+}
+```
+
+- The role must come from trusted server-side authentication data.
+- With JWT authentication, the role can be included in the signed token.
+
+```js
+const token = jwt.sign(
+  {
+    sub: user.id,
+    role: user.role
+  },
+  process.env.JWT_SECRET,
+  {
+    expiresIn: "15m"
+  }
+);
+```
+
+- After verification:
+
+```js
+req.user.role
+```
+
+can be used by authorization middleware.
+- The token's role is still only trustworthy after the signature has been successfully verified.
+
+## Helmet
+
+- Helmet is an Express middleware package that configures security-related HTTP response headers.
+- Install:
+
+```bash
+npm install helmet
+```
+
+- Usage:
+
+```js
+import helmet from "helmet";
+
+app.use(helmet());
+```
+
+- Security headers provide browser-level protections and safer defaults for HTTP behavior.
+- Depending on configuration and version, Helmet can configure headers such as:
+  - Content-Security-Policy
+  - X-Content-Type-Options
+  - Referrer-Policy
+  - Strict-Transport-Security
+  - X-Frame-Options
+- These headers address different browser security concerns.
+- Helmet does not authenticate users.
+- Helmet does not authorize users.
+- Helmet does not hash passwords.
+- Helmet does not replace input validation.
+- Helmet is one security layer inside the application.
+
+## CORS
+
+- CORS stands for Cross-Origin Resource Sharing.
+- Browsers normally restrict JavaScript from making certain requests to a different origin.
+- An origin consists of the scheme, host, and port.
+- Example frontend:
+
+```text
+http://localhost:5173
+```
+
+- Example backend:
+
+```text
+http://localhost:3000
+```
+
+- These are different origins because the ports are different.
+- CORS allows the backend to specify which browser origins are permitted to make cross-origin requests.
+- Install:
+
+```bash
+npm install cors
+```
+
+- Basic configuration:
+
+```js
+import cors from "cors";
+
+app.use(
+  cors({
+    origin: "http://localhost:5173"
+  })
+);
+```
+
+- The backend can allow a known list of origins:
+
+```js
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://app.example.com"
+];
+
+app.use(
+  cors({
+    origin: allowedOrigins
+  })
+);
+```
+
+- CORS is mainly a browser security mechanism.
+- CORS does not authenticate API users.
+- CORS does not prevent Postman from sending requests.
+- CORS does not prevent curl from sending requests.
+- CORS does not replace JWT authentication.
+- Authentication answers whether a requester is allowed to use protected resources.
+- CORS answers whether a browser origin is allowed to make a cross-origin request.
+
+## CORS Whitelisting
+
+- A CORS whitelist contains origins that are intentionally allowed to access the API from browser-based frontend code.
+- Example:
+
+```js
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://app.example.com"
+];
+```
+
+- An unknown browser origin should not automatically be trusted.
+- A dynamic CORS check can be used when more control is required:
+
+```js
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error("Origin not allowed")
+      );
+    }
+  })
+);
+```
+
+- The exact policy depends on the application architecture.
+- A public API and an internal company application may require different CORS policies.
+
+## express-rate-limit
+
+- Rate limiting restricts how many requests can be made during a defined time window.
+- It helps reduce automated abuse such as repeated login attempts.
+- Install:
+
+```bash
+npm install express-rate-limit
+```
+
+- Example:
+
+```js
+import rateLimit from "express-rate-limit";
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: {
+    message: "Too many login attempts. Try again later."
+  }
+});
+```
+
+- The configuration means that the login endpoint is limited according to the configured request count and time window.
+- Apply the limiter to the login route:
+
+```js
+app.post(
+  "/api/v1/auth/login",
+  loginLimiter,
+  loginHandler
+);
+```
+
+- Rate limiting is useful for:
+  - Login endpoints
+  - Registration endpoints
+  - Password reset endpoints
+  - OTP endpoints
+  - Expensive API operations
+  - Public APIs
+- Login endpoints are especially important because attackers can repeatedly attempt passwords.
+- A rate limiter does not make a password secure by itself.
+- Password hashing and rate limiting solve different problems:
+  - Password hashing protects stored passwords.
+  - Rate limiting reduces the speed of repeated online attempts.
+- A rate limiter can return:
+
+```text
+429 Too Many Requests
+```
+
+when the configured limit is exceeded.
+
+## Complete Security Middleware Setup
+
+- Security middleware can be registered near the beginning of the Express application.
+
+```js
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+
+const app = express();
+
+app.use(helmet());
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_ORIGIN
+  })
+);
+
+app.use(express.json());
+```
+
+- Each middleware has a different responsibility:
+
+```text
+helmet
+→ security-related HTTP headers
+
+cors
+→ browser cross-origin policy
+
+express.json()
+→ parse JSON request bodies
+
+authenticateToken
+→ verify user identity
+
+requireRole()
+→ check authorization
+```
+
+- No single middleware provides complete API security.
+
+## Environment Variables
+
+- Environment variables keep configuration and secrets outside the source code.
+- Example:
+
+```env
+PORT=3000
+JWT_SECRET=long-random-secret
+JWT_EXPIRES_IN=15m
+CLIENT_ORIGIN=http://localhost:5173
+```
+
+- Load them using:
+
+```js
+import "dotenv/config";
+```
+
+- Access them with:
+
+```js
+process.env.JWT_SECRET
+process.env.JWT_EXPIRES_IN
+process.env.CLIENT_ORIGIN
+```
+
+- Environment variables are useful for values that change between environments.
+- Development, testing, staging, and production can have different JWT secrets and frontend origins.
+- `.env` should not be committed when it contains secrets.
+
+## Authentication Module Project Structure
+
+```text
+Module3/
+├── src/
+│   ├── app.js
+│   ├── server.js
+│   ├── controllers/
+│   │   ├── auth.controller.js
+│   │   └── product.controller.js
+│   ├── data/
+│   │   ├── users.js
+│   │   └── products.js
+│   ├── middleware/
+│   │   ├── authenticateToken.js
+│   │   ├── requireRole.js
+│   │   └── rateLimiters.js
+│   ├── routes/
+│   │   ├── auth.routes.js
+│   │   └── product.routes.js
+│   └── utils/
+│       └── jwt.js
+├── .env
+├── .gitignore
+├── package.json
+└── README.md
+```
+
+- A small POC can initially keep fewer files.
+- The separation becomes useful when authentication, authorization, and product logic grow.
+- Middleware should contain reusable request checks.
+- Controllers should handle request and response logic.
+- Routes should mainly define URL-to-handler relationships.
+- Utility code such as token creation can be isolated so JWT configuration does not get duplicated.
+
+## POC API
+
+- Authentication routes:
+
+```text
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+```
+
+- Product routes:
+
+```text
+GET /api/v1/products
+POST /api/v1/products
+DELETE /api/v1/products/:id
+```
+
+- Access policy:
+
+```text
+POST /auth/register
+→ public
+
+POST /auth/login
+→ public + rate limited
+
+GET /products
+→ authenticated users
+
+POST /products
+→ authenticated users
+
+DELETE /products/:id
+→ authenticated admin users
+```
+
+## Register Implementation Flow
+
+```js
+app.post("/api/v1/auth/register", async (req, res) => {
+  const { name, email, password } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({
+      message: "Name, email and password are required"
+    });
+  }
+
+  const existingUser = users.find(
+    (user) => user.email === email
+  );
+
+  if (existingUser) {
+    return res.status(409).json({
+      message: "Email already registered"
+    });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  const user = {
+    id: crypto.randomUUID(),
+    name,
+    email,
+    passwordHash,
+    role: "user"
+  };
+
+  users.push(user);
+
+  return res.status(201).json({
+    message: "User registered successfully",
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    }
+  });
+});
+```
+
+- The password is hashed before the user is stored.
+- The response returns safe fields only.
+- The `passwordHash` is not returned.
+- The role is assigned by the server.
+- Duplicate emails are rejected before creating another account.
+
+## Login Implementation Flow
+
+```js
+app.post("/api/v1/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  const user = users.find(
+    (user) => user.email === email
+  );
+
+  if (!user) {
+    return res.status(401).json({
+      message: "Invalid email or password"
+    });
+  }
+
+  const isPasswordValid = await bcrypt.compare(
+    password,
+    user.passwordHash
+  );
+
+  if (!isPasswordValid) {
+    return res.status(401).json({
+      message: "Invalid email or password"
+    });
+  }
+
+  const accessToken = jwt.sign(
+    {
+      sub: user.id,
+      role: user.role
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: process.env.JWT_EXPIRES_IN
+    }
+  );
+
+  return res.status(200).json({
+    message: "Login successful",
+    accessToken
+  });
+});
+```
+
+- Login does not return the password.
+- Login does not return the password hash.
+- The JWT contains the minimum identity information needed for the practice authorization flow.
+- The token is signed using the server-side secret.
+- The token receives an expiration time.
+
+## Protected Product Route
+
+```js
+router.delete(
+  "/products/:id",
+  authenticateToken,
+  requireRole("admin"),
+  deleteProduct
+);
+```
+
+- Express executes middleware from left to right.
+- `authenticateToken` runs first.
+- If the token is invalid, the request stops.
+- If authentication succeeds, `req.user` is created.
+- `requireRole("admin")` then checks the verified role.
+- If the role is not `admin`, the request stops with `403`.
+- Only after both checks pass does `deleteProduct` execute.
+
+## Complete Request 
+
+- Registering a normal user:
+
+```text
+POST /api/v1/auth/register
+
+{
+  "name": "Gowtham",
+  "email": "gowtham@example.com",
+  "password": "StrongPassword@123"
+}
+```
+
+Expected:
+
+```text
+201 Created
+```
+
+- Logging in:
+
+```text
+POST /api/v1/auth/login
+
+{
+  "email": "gowtham@example.com",
+  "password": "StrongPassword@123"
+}
+```
+
+Expected:
+
+```text
+200 OK
+accessToken returned
+```
+
+- Requesting a protected endpoint without a token:
+
+```text
+GET /api/v1/products
+```
+
+Expected:
+
+```text
+401 Unauthorized
+```
+
+- Requesting a protected endpoint with a valid user token:
+
+```text
+GET /api/v1/products
+Authorization: Bearer <user-token>
+```
+
+Expected:
+
+```text
+200 OK
+```
+
+- Deleting a product with a normal user token:
+
+```text
+DELETE /api/v1/products/p101
+Authorization: Bearer <user-token>
+```
+
+Expected:
+
+```text
+403 Forbidden
+```
+
+- Deleting a product with an admin token:
+
+```text
+DELETE /api/v1/products/p101
+Authorization: Bearer <admin-token>
+```
+
+Expected:
+
+```text
+200 OK
+```
+
+- Sending an expired token:
+
+```text
+DELETE /api/v1/products/p101
+Authorization: Bearer <expired-token>
+```
+
+Expected:
+
+```text
+401 Unauthorized
+```
+
+- Sending too many login requests:
+
+```text
+POST /api/v1/auth/login
+```
+
+Expected after the configured limit:
+
+```text
+429 Too Many Requests
+```
+
+## Security Rules for the Practice Project
+
+- Never store plain-text passwords.
+- Never return passwords in API responses.
+- Never return password hashes in normal user responses.
+- Never hardcode JWT secrets in source code.
+- Never commit `.env` files containing secrets.
+- Always give access tokens an expiration time.
+- Always verify the JWT before using its claims.
+- Never use `req.body.role` as the source of authorization.
+- Use authenticated server-verified information for role checks.
+- Keep authentication and authorization as separate middleware responsibilities.
+- Use `401` when authentication has failed.
+- Use `403` when authentication succeeded but permission is insufficient.
+- Apply rate limiting to sensitive endpoints such as login.
+- Configure CORS according to known frontend origins instead of treating CORS as authentication.
+- Use Helmet as an additional HTTP security layer.
+- Use HTTPS in real deployments so passwords and tokens are protected while traveling between client and server.
+- Avoid logging access tokens, passwords, or other authentication secrets.
+- Keep JWT payloads small and avoid placing sensitive information inside them.
+- Do not assume a valid JWT means the user has permission for every operation.
+- Authentication and authorization are separate checks.
+
+## Final Request Flow
+
+```text
+REGISTER
+Client
+  ↓
+POST /register
+  ↓
+Validate input
+  ↓
+Check existing user
+  ↓
+Hash password
+  ↓
+Store passwordHash
+  ↓
+Create user
+```
+
+```text
+LOGIN
+Client
+  ↓
+POST /login
+  ↓
+Find user
+  ↓
+bcrypt.compare()
+  ↓
+Password valid
+  ↓
+jwt.sign()
+  ↓
+Access token
+  ↓
+Client
+```
+
+```text
+PROTECTED REQUEST
+Client
+  ↓
+Authorization: Bearer <token>
+  ↓
+authenticateToken
+  ↓
+jwt.verify()
+  ↓
+req.user = verified payload
+  ↓
+requireRole("admin")
+  ↓
+Permission check
+  ↓
+Controller
+  ↓
+Database / business operation
+  ↓
+Response
+```
+
+```text
+NORMAL USER DELETE REQUEST
+DELETE /products/:id
+  ↓
+JWT valid
+  ↓
+req.user.role = user
+  ↓
+requireRole("admin")
+  ↓
+403 Forbidden
+```
+
+```text
+ADMIN DELETE REQUEST
+DELETE /products/:id
+  ↓
+JWT valid
+  ↓
+req.user.role = admin
+  ↓
+requireRole("admin")
+  ↓
+deleteProduct()
+  ↓
+200 OK
+```
+
+
+

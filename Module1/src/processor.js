@@ -2,16 +2,16 @@ import fs from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { createCsvFilter } from "./csvFilter.js";
 
-export async function processFile(inputFile, outputFile, filterValue) {
-
-    //it will get updated in transform stream in CSVFilter
+export async function processFile(inputFile, outputFile, filterValue, startupRSSMB) {
+  
+  //it will get updated in transform stream in CSVFilter
     const statistics = {
-        totalRecords: 0,
-        matchedRecords: 0,
+          totalRecords: 0,
+          matchedRecords: 0,
     };
 
-    let peakMemoryMB = 0;//to measure RSS(max one)
-
+    let peakRSSMB = startupRSSMB; //to measure RSS(max one)
+  
     //to read chunk by chunk
     const readStream = fs.createReadStream(inputFile, {
           encoding: "utf8", //incoming raw bytes converted into readable js strings instead of buffers
@@ -25,30 +25,26 @@ export async function processFile(inputFile, outputFile, filterValue) {
     const filterStream = createCsvFilter(filterValue, statistics); // custom transform stream
 
     const memoryMonitor = setInterval(() => {
-          const memoryUsage = process.memoryUsage(); // to get memory statistics
-       console.log({
-                rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
-                heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
-                heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
-                external: `${(memoryUsage.external / 1024 / 1024).toFixed(2)} MB`,
-                arrayBuffers: `${(memoryUsage.arrayBuffers / 1024 / 1024).toFixed(2)} MB`,
-       });
-          const currentMemoryMB = memoryUsage.rss / 1024 / 1024;
-          peakMemoryMB = Math.max(peakMemoryMB, currentMemoryMB);
-    }, 100);
+        const currentRSSMB = process.memoryUsage().rss / 1024 / 1024;
+        peakRSSMB = Math.max(peakRSSMB, currentRSSMB);
+     }, 100);
 
     try {
       await pipeline(readStream, filterStream, writeStream);
 
     } finally {
-      clearInterval(memoryMonitor);
-      const finalMemoryMB = process.memoryUsage().rss / 1024 / 1024;
-      peakMemoryMB = Math.max(peakMemoryMB, finalMemoryMB);
-      console.log(peakMemoryMB ,"peakMemoryMB")
+    clearInterval(memoryMonitor);
+    const finalRSSMB = process.memoryUsage().rss / 1024 / 1024;
+    peakRSSMB = Math.max(
+        peakRSSMB,
+        finalRSSMB
+      );
     }
 
     return {
-      ...statistics,
-      peakMemoryMB: peakMemoryMB.toFixed(2),
+        ...statistics,
+        startupRSSMB: startupRSSMB.toFixed(2),
+        peakRSSMB: peakRSSMB.toFixed(2),
+        processingRSSIncreaseMB: (peakRSSMB - startupRSSMB).toFixed(2),
     };
 }

@@ -1,145 +1,224 @@
-//transform stream is both input -> prcess -> output
 import { Transform } from "node:stream";
 
-//Convert one csv line into array of column values
-function parseCsvLine(line) {
-  const columns = [];
-  let currentValue = "";
+// Read one CSV line and find the requested column.
+// We do not create an array containing every column.
+// If paymentStatusIndex is 2,
+// this function returns "PAID".
+function getCsvField(line, targetIndex) {
+  let fieldStart = 0;
+  let fieldIndex = 0;
   let insideQuotes = false;
 
-  //process csv line one charcter at a time
   for (let i = 0; i < line.length; i++) {
     const character = line[i];
 
     if (character === '"') {
-      //to handle inside double quotes , add one actual quote skip next
+      // Two quotes inside a quoted field represent
+      // one actual quote character.
       if (insideQuotes && line[i + 1] === '"') {
-        currentValue += '"';
         i++;
-      } else {
-        insideQuotes = !insideQuotes;
+        continue;
       }
+
+      insideQuotes = !insideQuotes;
       continue;
     }
 
-    //to handle comma which is not used to denote field.
+    // A comma outside quotes means the current field ended.
     if (character === "," && !insideQuotes) {
-      columns.push(currentValue);
-      currentValue = "";
+      if (fieldIndex === targetIndex) {
+        return line.slice(fieldStart, i);
+      }
+      fieldIndex++;
+      fieldStart = i + 1;
+    }
+  }
+
+  // Handle the final field because there is no comma
+  // after the last column.
+  if (fieldIndex === targetIndex) {
+    return line.slice(fieldStart);
+  }
+  return null;
+}
+
+// Count how many columns exist in a CSV line.
+function countCsvColumns(line) {
+  let columnCount = 1;
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const character = line[i];
+
+    if (character === '"') {
+      // Skip escaped quotes: ""
+      if (insideQuotes && line[i + 1] === '"') {
+        i++;
+        continue;
+      }
+
+      insideQuotes = !insideQuotes;
       continue;
     }
-    currentValue += character;
+
+    // Only commas outside quoted fields separate columns.
+    if (character === "," && !insideQuotes) {
+      columnCount++;
+    }
   }
-  // last column not end with comma
-  columns.push(currentValue);
-  return columns;
+  return columnCount;
 }
 
-//to wrap the vaule in quotes(quote inside quote field)
-function escapeCsvField(value) {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replaceAll('"', '""')}"`;
-  }
-
-  return value;
-}
-
-//transform stream creation
 export function createCsvFilter(filterValue, statistics) {
-  // to keep incomplete chunk part and then to combine it
+  // Stores only the unfinished part of the previous chunk.
+  // chunk 1 -> "101,Gowtham,PA"
+  // chunk 2 -> "ID,5000\n"
+  // remaining keeps "101,Gowtham,PA" until the next chunk arrives.
   let remaining = "";
-  // to store field names first row
+
+  // Header information is needed only once.
   let headers = null;
   let paymentStatusIndex = -1;
 
+  // Process one complete CSV line.
   function processLine(line, stream) {
+    // Make sure the row has the same number of columns
+    // as the header.
+    const columnCount = countCsvColumns(line);
 
-      const columns = parseCsvLine(line);
-    
-      // validate csv row
-      if (columns.length !== headers.length) {
-            throw new Error(`Invalid CSV row. Expected ${headers.length} columns but received ${columns.length}.`);
-      }
+    if (columnCount !== headers.length) {
+      throw new Error(
+        `Invalid CSV row. Expected ${headers.length} columns but received ${columnCount}.`,
+      );
+    }
 
-      const paymentStatus = columns[paymentStatusIndex].trim();
-      statistics.totalRecords++;
+    // Find only the payment_status value.
+    // We do NOT create an array containing every column.
+    const paymentStatus = getCsvField(line, paymentStatusIndex).trim();
+    statistics.totalRecords++;
 
-      if (paymentStatus === filterValue) {
-            statistics.matchedRecords++;
-            
-            // converts array into valid csv
-            stream.push(columns.map(escapeCsvField).join(",") + "\n");
-      }
-    }   
-            
+    // If the status doesn't match, discard the row immediately.
+    if (paymentStatus !== filterValue) {
+      return;
+    }
+
+    statistics.matchedRecords++;
+
+    // The original CSV line is already valid.
+    // There is no need to parse it into an array and
+    stream.push(line + "\n");
+  }
+
   return new Transform({
-    //calls this when our transform stream receives data
+    // Called whenever the Transform receives another chunk.
     transform(chunk, encoding, callback) {
       try {
-        
-        // console.log("Chunk size:",(Buffer.byteLength(chunk, "utf8") / 1024).toFixed(2),"KB");
-
-        // add incomplete data from previous chunk
+        // Keep the previous incomplete line and add the
+        // newly received chunk.
         remaining += chunk;
-        const lines = remaining.split("\n");
-        //remove last incomplete in lines array
-        remaining = lines.pop()
+        let lineStart = 0;
 
-        //process every complete line
-        for (const rawLine of lines) {
-
-          // windows line endings commonly have \r\n , \n is splitted, so \r is removed now
-          const line = rawLine.replace(/\r$/, "");
-
-          // to ignore empty lines
-          if (!line.trim()) {
+        // Scan the chunk for newline characters.
+    
+        for (let i = 0; i < remaining.length; i++) {
+          if (remaining[i] !== "\n") {
             continue;
           }
 
-          // if it is first line
+          // We found one complete line.
+          const rawLine = remaining.slice(lineStart, i);
+
+          // Windows files normally use \r\n.
+          // Remove the \r because \n was already detected.
+          const line = rawLine.replace(/\r$/, "");
+
+          // Ignore completely empty lines.
+          if (!line.trim()) {
+            lineStart = i + 1;
+            continue;
+          }
+
+          // The first non-empty line is the CSV header.
           if (!headers) {
-            headers = parseCsvLine(line);
+            headers = [];
+            let insideQuotes = false;
+            let fieldStart = 0;
+
+            // Parse only the header because we need
+            // to find the payment_status column index.
+            for (let j = 0; j < line.length; j++) {
+              const character = line[j];
+
+              if (character === '"') {
+                if (insideQuotes && line[j + 1] === '"') {
+                  j++;
+                  continue;
+                }
+
+                insideQuotes = !insideQuotes;
+                continue;
+              }
+
+              if (character === "," && !insideQuotes) {
+                headers.push(line.slice(fieldStart, j));
+
+                fieldStart = j + 1;
+              }
+            }
+
+            // Add the final header field.
+            headers.push(line.slice(fieldStart));
+
             paymentStatusIndex = headers.indexOf("payment_status");
 
-            //validate header
             if (paymentStatusIndex === -1) {
               callback(new Error("payment_status column not found"));
               return;
             }
-            
-            // output still need field headings
+
+            // The output must still contain the header.
             this.push(line + "\n");
-            continue;
+          } else {
+            // Process one complete data row.
+            processLine(line, this);
           }
 
-          processLine(line,this);
+          // The next line starts after this newline.
+          lineStart = i + 1;
         }
 
-        callback();       //part of transform stream api, ask next chunk for process
+        // Keep only the unfinished line.
+        // Everything before lineStart has already been processed and can be released.
+        remaining = remaining.slice(lineStart);
+
+        callback();
       } catch (error) {
-        callback(error);      // pass error to the stream, so pipeline() can handle it
+        callback(error);
       }
     },
 
-    //when the input stream has finished, to handle the last remaining  data
+    // Called after the input stream has no more data.
     flush(callback) {
       try {
+        // The final line may not end with \n.
         const line = remaining.replace(/\r$/, "");
 
+        // Nothing remains to process.
         if (!line.trim()) {
           callback();
           return;
         }
 
+        // A CSV file without a header is invalid.
         if (!headers) {
           callback(new Error("CSV file does not contain a header"));
           return;
         }
 
-       
-        processLine(line,this);
-        callback();
+        // Process the final row.
+        processLine(line, this);
 
+        callback();
       } catch (error) {
         callback(error);
       }
