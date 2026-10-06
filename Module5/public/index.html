@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShieldCart</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="shield" aria-hidden="true"></span><h1>ShieldCart</h1></div>
+    <p class="tagline">Auth &amp; RBAC playground for Module 5</p>
+  </header>
+  <main class="layout">
+    <aside class="rail">
+      <section class="gate" id="guestPanel">
+        <div class="tabs" role="tablist">
+          <button class="tab active" id="loginTab" type="button">Sign in</button>
+          <button class="tab" id="registerTab" type="button">Create account</button>
+        </div>
+        <form id="loginForm" class="stack">
+          <label>Email<input type="email" id="loginEmail" value="user@example.com" required></label>
+          <label>Password<input type="password" id="loginPassword" value="UserPass2026" required></label>
+          <button class="primary" type="submit">Sign in</button>
+          <p class="hint">Seeded accounts: user@example.com / UserPass2026 and admin@example.com / AdminPass2026</p>
+        </form>
+        <form id="registerForm" class="stack hidden">
+          <label>Name<input type="text" id="registerName" required></label>
+          <label>Email<input type="email" id="registerEmail" required></label>
+          <label>Password<input type="password" id="registerPassword" required></label>
+          <button class="primary" type="submit">Create account</button>
+          <p class="hint">8+ characters with an uppercase letter, a lowercase letter and a number.</p>
+        </form>
+      </section>
+      <section class="gate hidden" id="sessionPanel">
+        <p class="greeting">Signed in as</p>
+        <h2 id="userName"></h2>
+        <p id="userEmail" class="muted"></p>
+        <p><span id="roleBadge" class="badge"></span></p>
+        <div class="expiry">
+          <p class="muted">Access token expires in <strong id="expiryText">--</strong></p>
+          <div class="meter"><div id="expiryBar" class="meterFill"></div></div>
+        </div>
+        <div class="buttonRow">
+          <button type="button" id="profileButton">Get profile</button>
+          <button type="button" id="refreshButton">Refresh token</button>
+          <button type="button" id="breakButton">Break access token</button>
+          <button type="button" id="adminTryButton">Try admin endpoint</button>
+          <button type="button" id="logoutButton" class="danger">Sign out</button>
+        </div>
+        <p class="hint">Tokens live in JavaScript memory only. Reload the page and you are signed out.</p>
+      </section>
+    </aside>
+    <section class="content">
+      <section class="block">
+        <div class="blockHead"><h2>Products</h2><button type="button" id="loadProductsButton">Reload products</button></div>
+        <p id="productsMessage" class="muted">Sign in to see the catalogue.</p>
+        <div id="productGrid" class="grid"></div>
+      </section>
+      <section class="block hidden" id="adminPanel">
+        <h2>Admin: add a product</h2>
+        <form id="productForm" class="formGrid">
+          <label>Name<input type="text" id="productName" required></label>
+          <label>Category<input type="text" id="productCategory" required></label>
+          <label>Price<input type="number" id="productPrice" min="0" step="0.01" required></label>
+          <label>Stock<input type="number" id="productStock" min="0" step="1" value="10" required></label>
+          <label class="wide">Description<textarea id="productDescription" rows="2" required></textarea></label>
+          <button class="primary" type="submit">Create product</button>
+        </form>
+      </section>
+      <section class="block">
+        <div class="blockHead"><h2>Request log</h2><button type="button" id="clearLogButton">Clear</button></div>
+        <ul id="activityLog" class="log"></ul>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

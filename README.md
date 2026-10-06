@@ -8275,5 +8275,2278 @@ deleteProduct()
 200 OK
 ```
 
+Yes. The easiest way is to give the **entire note as one single Markdown code block**, so there are no separate pieces to copy.
+
+The previous answer was split because I was trying to keep the chat readable. For your actual `.md` file, copy everything between the opening and closing ``` below into:
+
+`Module_6_Testing_Caching_Production_Deployment.md`
+
+````md
+# Module 6: Testing, Caching, & Production Deployment
+
+Verify the application automatically, improve repeated data retrieval using caching, manage multiple Node.js processes, and deploy the application into a production environment.
+
+The main topics covered in this module:
+
+* Automated API testing using Node.js Test Runner or Jest with Supertest
+* Redis caching for expensive or frequently repeated database queries
+* PM2 process management
+* PM2 cluster mode and multi-core processing
+* Production environment configuration
+* Production logging
+* Cloud deployment and deployment pipelines
+* Health checks and production monitoring
+* Performance verification
+
+The practice application used throughout this module is a Task Manager API.
+
+```text
+Client
+|
+Express API
+|
+|-- Automated Tests
+|
+|-- MongoDB
+|
+|-- Redis Cache
+|
+|-- PM2
+|
+Production Cloud Infrastructure
+````
+
+# 1. Automated Endpoint Testing
+
+Automated endpoint testing verifies that API endpoints continue to behave correctly after code changes.
+
+Manual testing through Postman is useful during development, but it becomes difficult when the API contains many endpoints.
+
+For example, a Task Manager API may contain:
+
+```text
+POST   /api/v1/tasks
+GET    /api/v1/tasks
+GET    /api/v1/tasks/:id
+PATCH  /api/v1/tasks/:id
+DELETE /api/v1/tasks/:id
+```
+
+Checking all of these manually after every change takes time and can easily miss an existing bug.
+
+Automated tests allow the same API behavior to be checked repeatedly with a single command.
+
+```text
+Code change
+|
+Run tests
+|
+All tests pass
+|
+Existing API behavior is still working
+```
+
+A test should verify application behavior rather than only checking whether a function was called.
+
+For an API, important things to verify include:
+
+* HTTP status code
+* Response body
+* Response structure
+* Request validation
+* Query parameters
+* Route parameters
+* Authentication
+* Authorization
+* Error responses
+* Database behavior
+* Important business rules
+
+## Jest and Supertest
+
+Jest is a JavaScript testing framework.
+
+Supertest is useful for sending HTTP-style requests to an Express application during testing.
+
+For example:
+
+```js
+const request = require("supertest");
+const app = require("../src/app");
+
+const response = await request(app)
+    .get("/api/v1/tasks")
+    .expect(200);
+```
+
+Supertest sends a request to the Express application and provides the response for assertions.
+
+The Express application does not need to be manually started through `app.listen()` for this type of test.
+
+## Separating app.js and server.js
+
+A useful Express structure is:
+
+```text
+src/
+|
+|-- app.js
+|-- server.js
+|-- routes/
+|-- controllers/
+|-- models/
+```
+
+`app.js` creates the Express application:
+
+```js
+const express = require("express");
+
+const app = express();
+
+app.use(express.json());
+
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        status: "ok"
+    });
+});
+
+module.exports = app;
+```
+
+`server.js` starts the HTTP server:
+
+```js
+const app = require("./app");
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
+```
+
+This separation is important for testing.
+
+The test can import:
+
+```js
+const app = require("../src/app");
+```
+
+without automatically opening a real server port.
+
+If `app.listen()` is directly executed while importing the application, tests can create unnecessary server processes and port conflicts.
+
+## Installing Jest and Supertest
+
+```bash
+npm install --save-dev jest supertest
+```
+
+Example `package.json`:
+
+```json
+{
+    "scripts": {
+        "dev": "nodemon src/server.js",
+        "start": "node src/server.js",
+        "test": "jest --runInBand"
+    }
+}
+```
+
+`npm test` can then execute the complete test suite.
+
+## Basic GET endpoint test
+
+Example endpoint:
+
+```js
+app.get("/api/v1/tasks", async (req, res) => {
+    const tasks = [
+        {
+            id: "1",
+            title: "Fix payment issue",
+            priority: "high"
+        },
+        {
+            id: "2",
+            title: "Update dashboard",
+            priority: "medium"
+        }
+    ];
+
+    res.status(200).json(tasks);
+});
+```
+
+Test:
+
+```js
+const request = require("supertest");
+const app = require("../src/app");
+
+describe("GET /api/v1/tasks", () => {
+    test("should return all tasks", async () => {
+        const response = await request(app)
+            .get("/api/v1/tasks")
+            .expect(200);
+
+        expect(Array.isArray(response.body)).toBe(true);
+        expect(response.body.length).toBe(2);
+    });
+});
+```
+
+The test verifies:
+
+```text
+GET request
+|
+Endpoint executes
+|
+HTTP status = 200
+|
+Response is an array
+|
+Two tasks are returned
+```
+
+## Testing response properties
+
+Suppose the API returns:
+
+```json
+{
+    "id": "123",
+    "title": "Fix payment issue",
+    "priority": "high"
+}
+```
+
+The test can verify specific properties:
+
+```js
+expect(response.body).toHaveProperty("id");
+expect(response.body).toHaveProperty("title");
+expect(response.body.priority).toBe("high");
+```
+
+This protects the API response contract.
+
+For example, if a future change accidentally removes `priority`, the test fails.
+
+## Testing POST requests
+
+POST requests can send JSON using `.send()`.
+
+Example:
+
+```js
+test("should create a new task", async () => {
+    const response = await request(app)
+        .post("/api/v1/tasks")
+        .send({
+            title: "Prepare deployment",
+            priority: "high"
+        })
+        .expect(201);
+
+    expect(response.body).toHaveProperty("_id");
+    expect(response.body.title).toBe("Prepare deployment");
+    expect(response.body.priority).toBe("high");
+});
+```
+
+The test checks the complete request-response behavior.
+
+```text
+POST request
+|
+JSON body
+|
+Validation
+|
+Database creation
+|
+201 response
+|
+Created task returned
+```
+
+## Testing validation errors
+
+Suppose `title` is required:
+
+```js
+app.post("/api/v1/tasks", async (req, res) => {
+    if (!req.body.title) {
+        return res.status(400).json({
+            message: "Title is required"
+        });
+    }
+
+    // Create task
+});
+```
+
+Test:
+
+```js
+test("should reject task without title", async () => {
+    const response = await request(app)
+        .post("/api/v1/tasks")
+        .send({
+            priority: "high"
+        })
+        .expect(400);
+
+    expect(response.body.message).toBe("Title is required");
+});
+```
+
+Testing invalid requests is important because production applications receive invalid and unexpected input regularly.
+
+## Testing route parameters
+
+Example:
+
+```text
+GET /api/v1/tasks/123
+```
+
+Route:
+
+```js
+app.get("/api/v1/tasks/:id", async (req, res) => {
+    const task = await Task.findById(req.params.id);
+
+    if (!task) {
+        return res.status(404).json({
+            message: "Task not found"
+        });
+    }
+
+    res.status(200).json(task);
+});
+```
+
+Test:
+
+```js
+test("should return task by id", async () => {
+    const response = await request(app)
+        .get(`/api/v1/tasks/${taskId}`)
+        .expect(200);
+
+    expect(response.body).toHaveProperty("_id");
+});
+```
+
+Not-found behavior should also be tested:
+
+```js
+test("should return 404 when task does not exist", async () => {
+    const response = await request(app)
+        .get("/api/v1/tasks/65ffffffffffffffffffffff")
+        .expect(404);
+
+    expect(response.body.message).toBe("Task not found");
+});
+```
+
+A successful request and a failure request are both part of the endpoint contract.
+
+## Testing query parameters
+
+Example:
+
+```text
+GET /api/v1/tasks?priority=high
+```
+
+Test:
+
+```js
+test("should filter tasks by priority", async () => {
+    const response = await request(app)
+        .get("/api/v1/tasks")
+        .query({
+            priority: "high"
+        })
+        .expect(200);
+
+    expect(
+        response.body.every(task => task.priority === "high")
+    ).toBe(true);
+});
+```
+
+`.query()` creates the query string.
+
+It is cleaner than manually constructing:
+
+```text
+/api/v1/tasks?priority=high
+```
+
+inside every test.
+
+## Testing authentication
+
+Authenticated endpoints can send headers:
+
+```js
+const response = await request(app)
+    .get("/api/v1/tasks")
+    .set("Authorization", `Bearer ${token}`)
+    .expect(200);
+```
+
+Important authentication tests include:
+
+```text
+No token
+|
+401 Unauthorized
+
+Invalid token
+|
+401 Unauthorized
+
+Valid token
+|
+200 OK
+```
+
+Authorization can also be tested:
+
+```text
+Authenticated but insufficient permission
+|
+403 Forbidden
+```
+
+## Testing the Node.js native test runner
+
+Node.js provides a built-in test runner through `node:test`.
+
+Example:
+
+```js
+const test = require("node:test");
+const assert = require("node:assert");
+const request = require("supertest");
+const app = require("../src/app");
+
+test("GET /health should return ok", async () => {
+    const response = await request(app)
+        .get("/health")
+        .expect(200);
+
+    assert.strictEqual(response.body.status, "ok");
+});
+```
+
+The native test runner is useful when a project does not need the larger Jest ecosystem.
+
+Jest provides additional testing features and a familiar assertion and mocking structure.
+
+The important part is not the framework name.
+
+The important part is having repeatable automated tests that verify actual application behavior.
+
+## Database tests
+
+Database-backed API tests need controlled test data.
+
+A common lifecycle is:
+
+```text
+beforeAll
+|
+Connect to test database
+
+beforeEach
+|
+Prepare required test data
+
+test
+|
+Execute endpoint
+
+afterAll
+|
+Close database connection
+```
+
+Example:
+
+```js
+beforeAll(async () => {
+    await connectTestDatabase();
+});
+
+beforeEach(async () => {
+    await Task.deleteMany({});
+});
+
+afterAll(async () => {
+    await disconnectTestDatabase();
+});
+```
+
+A separate test database should be used.
+
+The production database should never be used for automated tests because tests intentionally create, update and delete data.
+
+## Important API test cases
+
+For the Task Manager API:
+
+```text
+POST /tasks
+|
+Valid task -> 201
+Missing title -> 400
+Invalid priority -> 400
+
+GET /tasks
+|
+All tasks -> 200
+Priority filter -> 200
+No matching tasks -> 200 with []
+
+GET /tasks/:id
+|
+Existing task -> 200
+Missing task -> 404
+
+PATCH /tasks/:id
+|
+Valid update -> 200
+Invalid update -> 400
+Missing task -> 404
+
+DELETE /tasks/:id
+|
+Existing task -> 204
+Missing task -> 404
+```
+
+The goal is not to create meaningless tests for every line.
+
+The goal is to protect important application behavior from regression.
+
+# 2. Redis Caching
+
+Redis is an in-memory data store commonly used for very fast data retrieval.
+
+A database query can involve:
+
+```text
+Network communication
+|
+Query processing
+|
+Index lookup
+|
+Database execution
+|
+Result conversion
+```
+
+If the same expensive data is requested repeatedly, Redis can store the result temporarily in memory.
+
+Normal request:
+
+```text
+Client
+|
+Express
+|
+MongoDB
+|
+Response
+```
+
+Cached request:
+
+```text
+Client
+|
+Express
+|
+Redis
+|
+Cached response
+```
+
+When Redis already contains the required data, the database query can be skipped.
+
+## Where caching is useful
+
+Caching is useful when:
+
+* The same data is requested frequently.
+* The data does not change very often.
+* Database queries are expensive.
+* External API requests are expensive.
+* Response latency needs to be reduced.
+* Database load needs to be reduced.
+
+Examples:
+
+```text
+Product categories
+Popular products
+Dashboard statistics
+Public configuration
+Frequently requested reports
+Frequently requested task lists
+```
+
+Caching is not automatically useful for every endpoint.
+
+Highly dynamic data may become stale quickly.
+
+For example, a payment status endpoint should not blindly return an old cached result when the latest database value is required.
+
+## Redis is not normally the primary database
+
+MongoDB:
+
+```text
+Persistent application data
+```
+
+Redis:
+
+```text
+Fast temporary/shared data
+```
+
+If Redis loses a cached value, the original database should still contain the actual task.
+
+This makes Redis a caching layer rather than the source of truth for ordinary application data.
+
+## Installing Redis client
+
+```bash
+npm install redis
+```
+
+Example connection:
+
+```js
+const { createClient } = require("redis");
+
+const redisClient = createClient({
+    url: process.env.REDIS_URL
+});
+
+redisClient.on("error", error => {
+    console.error("Redis error:", error);
+});
+
+await redisClient.connect();
+```
+
+The Redis connection should normally be created once when the application starts.
+
+A new Redis connection should not be created for every HTTP request.
+
+## Redis environment variable
+
+Development:
+
+```env
+REDIS_URL=redis://localhost:6379
+```
+
+Production:
+
+```env
+REDIS_URL=<managed-redis-connection-string>
+```
+
+The production connection string may contain credentials and should not be committed to Git.
+
+## Cache keys
+
+Redis needs a key to identify cached data.
+
+Examples:
+
+```text
+tasks:all
+tasks:priority:high
+tasks:priority:medium
+tasks:priority:low
+task:65f123...
+```
+
+A cache key should clearly represent the data stored under it.
+
+Bad:
+
+```text
+data
+```
+
+Better:
+
+```text
+tasks:all
+```
+
+For a specific task:
+
+```text
+task:65f123abc
+```
+
+## Cache-aside pattern
+
+The application first checks Redis.
+
+```text
+Request
+|
+Redis GET
+|
+Cache exists?
+|
+YES -> Return cached data
+|
+NO
+|
+Query MongoDB
+|
+Store result in Redis
+|
+Return result
+```
+
+This is commonly called the cache-aside pattern.
+
+## Example cached endpoint
+
+```js
+app.get("/api/v1/tasks", async (req, res, next) => {
+    try {
+        const { priority } = req.query;
+
+        const cacheKey = `tasks:priority:${priority || "all"}`;
+
+        const cachedTasks = await redisClient.get(cacheKey);
+
+        if (cachedTasks) {
+            return res.status(200).json(
+                JSON.parse(cachedTasks)
+            );
+        }
+
+        const filter = {};
+
+        if (priority) {
+            filter.priority = priority;
+        }
+
+        const tasks = await Task.find(filter);
+
+        await redisClient.setEx(
+            cacheKey,
+            60,
+            JSON.stringify(tasks)
+        );
+
+        return res.status(200).json(tasks);
+    } catch (error) {
+        next(error);
+    }
+});
+```
+
+The first request:
+
+```text
+GET /tasks
+|
+Redis MISS
+|
+MongoDB query
+|
+Redis SET
+|
+Response
+```
+
+The next request before the TTL expires:
+
+```text
+GET /tasks
+|
+Redis HIT
+|
+Response
+```
+
+MongoDB does not need to execute the query again.
+
+## JSON.stringify and JSON.parse
+
+Redis commonly stores values as strings.
+
+JavaScript object:
+
+```js
+const task = {
+    title: "Fix payment issue",
+    priority: "high"
+};
+```
+
+Before storing:
+
+```js
+JSON.stringify(task);
+```
+
+Result:
+
+```text
+{"title":"Fix payment issue","priority":"high"}
+```
+
+After retrieving:
+
+```js
+JSON.parse(cachedTask);
+```
+
+The string becomes a JavaScript object again.
+
+Flow:
+
+```text
+JavaScript object
+|
+JSON.stringify()
+|
+Redis string
+|
+JSON.parse()
+|
+JavaScript object
+```
+
+## TTL
+
+TTL means Time To Live.
+
+Example:
+
+```js
+await redisClient.setEx(
+    cacheKey,
+    60,
+    JSON.stringify(tasks)
+);
+```
+
+`60` means the cache entry expires after 60 seconds.
+
+TTL prevents cached data from remaining forever.
+
+A suitable TTL depends on how frequently the original data changes.
+
+Example:
+
+```text
+Frequently changing dashboard
+|
+Short TTL
+
+Product category list
+|
+Longer TTL
+
+Static configuration
+|
+Long TTL
+```
+
+There is no universal TTL value.
+
+Long TTL:
+
+```text
+More cache reuse
+Less database traffic
+Higher chance of stale data
+```
+
+Short TTL:
+
+```text
+Fresher data
+More database requests
+Lower cache reuse
+```
+
+## Cache invalidation
+
+Caching becomes more complicated when the database data changes.
+
+Example:
+
+```text
+GET /tasks
+|
+Redis stores tasks:all
+```
+
+Then:
+
+```text
+PATCH /tasks/:id
+|
+Task changes in MongoDB
+```
+
+The existing `tasks:all` value is now stale.
+
+The cache should be invalidated.
+
+Example:
+
+```js
+await Task.findByIdAndUpdate(taskId, update);
+
+await redisClient.del("tasks:all");
+```
+
+For multiple filtered caches:
+
+```text
+tasks:all
+tasks:priority:high
+tasks:priority:medium
+tasks:priority:low
+```
+
+A task update can affect multiple cached representations.
+
+This is why caching should be added only when the performance benefit is worth the additional invalidation complexity.
+
+## Cache invalidation after creation
+
+Example:
+
+```js
+const task = await Task.create(req.body);
+
+await redisClient.del("tasks:all");
+
+return res.status(201).json(task);
+```
+
+The newly created task will not be missing from a stale `tasks:all` cache.
+
+## Cache invalidation after update
+
+Example:
+
+```js
+const task = await Task.findByIdAndUpdate(
+    req.params.id,
+    req.body,
+    {
+        new: true
+    }
+);
+
+await redisClient.del(`task:${req.params.id}`);
+await redisClient.del("tasks:all");
+
+return res.status(200).json(task);
+```
+
+## Cache invalidation after delete
+
+```js
+await Task.findByIdAndDelete(req.params.id);
+
+await redisClient.del(`task:${req.params.id}`);
+await redisClient.del("tasks:all");
+
+return res.status(204).send();
+```
+
+Filtered cache keys may also need invalidation depending on the application.
+
+## Cache hit and cache miss logging
+
+During development:
+
+```js
+console.log("Redis cache hit");
+```
+
+and:
+
+```js
+console.log("Redis cache miss");
+```
+
+These logs help verify that caching is actually working.
+
+For production, a structured logging system should be used instead of uncontrolled console output.
+
+## Cache stampede
+
+A cache stampede can happen when a popular cache entry expires and many requests arrive at almost the same time.
+
+Example:
+
+```text
+100 requests
+|
+Same cache key
+|
+Cache expired
+|
+100 requests query MongoDB
+```
+
+Instead of reducing database traffic, the expired cache can temporarily create a large database load.
+
+Large production systems can use techniques such as:
+
+* Request coalescing
+* Redis locking
+* Stale-while-revalidate
+* Randomized TTLs
+* Background refresh
+
+A simple Task Manager API normally does not need these techniques immediately.
+
+# 3. PM2 Process Management
+
+Node.js runs JavaScript using an event loop and a main JavaScript execution thread.
+
+A single Node.js process does not automatically execute JavaScript across every CPU core.
+
+For example:
+
+```text
+Server
+|
+8 CPU cores
+|
+Node.js process
+|
+Main JavaScript execution
+```
+
+One Node.js process does not mean all 8 CPU cores are automatically being used for JavaScript execution.
+
+Multiple Node.js processes can be created to increase application throughput on multi-core machines.
+
+PM2 is a process manager used to manage Node.js applications in production.
+
+PM2 can:
+
+* Start applications
+* Restart crashed applications
+* Manage application processes
+* Manage logs
+* Run multiple instances
+* Run applications in cluster mode
+* Reload applications
+* Manage environment configuration
+
+## Installing PM2
+
+```bash
+npm install -g pm2
+```
+
+Start the application:
+
+```bash
+pm2 start src/server.js --name task-api
+```
+
+Check running processes:
+
+```bash
+pm2 list
+```
+
+View logs:
+
+```bash
+pm2 logs task-api
+```
+
+Restart:
+
+```bash
+pm2 restart task-api
+```
+
+Stop:
+
+```bash
+pm2 stop task-api
+```
+
+Delete:
+
+```bash
+pm2 delete task-api
+```
+
+## PM2 cluster mode
+
+PM2 can start multiple instances of the same Node.js application.
+
+Example:
+
+```bash
+pm2 start src/server.js -i 4
+```
+
+This creates four Node.js worker processes.
+
+Conceptually:
+
+```text
+PM2
+|
+|-- Node Worker 1
+|-- Node Worker 2
+|-- Node Worker 3
+|-- Node Worker 4
+```
+
+Each worker is a separate Node.js process.
+
+Each worker has its own:
+
+* Event loop
+* JavaScript memory
+* Variables
+* Module instances
+
+## Using available CPU capacity
+
+```bash
+pm2 start src/server.js -i max
+```
+
+`max` tells PM2 to create instances based on the available CPU capacity.
+
+The actual number of useful workers depends on:
+
+* CPU count
+* Workload
+* Memory
+* Database performance
+* External services
+* Application architecture
+
+More workers do not automatically mean better performance.
+
+## Request distribution
+
+With cluster mode:
+
+```text
+Client
+|
+PM2 / Node cluster
+|
+|-- Worker 1
+|-- Worker 2
+|-- Worker 3
+|-- Worker 4
+```
+
+Incoming requests can be distributed among workers.
+
+From the API client's perspective, the endpoint remains the same.
+
+The important difference is that multiple Node.js processes are available to handle traffic.
+
+## Worker memory is separate
+
+Consider:
+
+```js
+let requestCount = 0;
+```
+
+Worker 1:
+
+```text
+requestCount = 100
+```
+
+Worker 2:
+
+```text
+requestCount = 80
+```
+
+These values are not automatically shared.
+
+Each process has separate memory.
+
+This means normal JavaScript variables should not be used as shared application state in a clustered application.
+
+For shared state, external storage can be used:
+
+```text
+Redis
+Database
+External session store
+```
+
+## Stateless application
+
+A clustered Express API should ideally be stateless.
+
+For example, this is problematic as shared session storage:
+
+```js
+const loggedInUsers = {};
+```
+
+Worker 1 may contain a user's session while the next request reaches Worker 2.
+
+Worker 2 does not automatically have Worker 1's memory.
+
+A shared session store such as Redis can solve this problem.
+
+```text
+Worker 1
+|
+Redis
+|
+Worker 2
+|
+Redis
+|
+Worker 3
+```
+
+All workers can access the same external state.
+
+## CPU-bound operations
+
+Examples of CPU-heavy work:
+
+* Large image processing
+* Video processing
+* Large file transformations
+* Complex calculations
+* Heavy cryptographic operations
+
+A CPU-heavy operation can block the event loop of the worker handling it.
+
+Adding more PM2 workers can increase overall throughput, but it does not make one CPU-heavy request non-blocking.
+
+For heavy CPU tasks, other approaches may be more suitable:
+
+```text
+Worker Threads
+Job queues
+Background workers
+Separate processing services
+```
+
+# 4. PM2 Ecosystem Configuration
+
+PM2 settings can be stored in:
+
+```text
+ecosystem.config.js
+```
+
+Example:
+
+```js
+module.exports = {
+    apps: [
+        {
+            name: "task-api",
+            script: "./src/server.js",
+            instances: "max",
+            exec_mode: "cluster",
+            env: {
+                NODE_ENV: "development",
+                PORT: 3000
+            },
+            env_production: {
+                NODE_ENV: "production",
+                PORT: 3000
+            }
+        }
+    ]
+};
+```
+
+Production start:
+
+```bash
+pm2 start ecosystem.config.js --env production
+```
+
+This configuration makes deployment commands more predictable.
+
+Instead of remembering a long command every time, the process configuration stays inside the project.
+
+# 5. Graceful Shutdown
+
+Production processes can receive shutdown signals during:
+
+* Deployment
+* PM2 reload
+* Server restart
+* Cloud instance replacement
+* Container shutdown
+
+The application should close resources cleanly instead of immediately terminating active operations.
+
+Example:
+
+```js
+const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
+
+process.on("SIGTERM", () => {
+    console.log("SIGTERM received");
+
+    server.close(() => {
+        console.log("HTTP server closed");
+        process.exit(0);
+    });
+});
+```
+
+A larger application should also close:
+
+```text
+MongoDB connection
+Redis connection
+Queue consumers
+Other external resources
+```
+
+Graceful shutdown reduces the chance of interrupted requests and incomplete operations during deployment.
+
+# 6. Production Environment Configuration
+
+Development and production environments usually require different configuration.
+
+Development:
+
+```text
+Local MongoDB
+Local Redis
+Detailed debugging
+Development logging
+```
+
+Production:
+
+```text
+Cloud database
+Managed Redis
+Secure secrets
+Production logging
+Production monitoring
+```
+
+`NODE_ENV` identifies the current runtime environment.
+
+Example:
+
+```env
+NODE_ENV=production
+```
+
+Application code can read it:
+
+```js
+const isProduction =
+    process.env.NODE_ENV === "production";
+```
+
+## Environment variables
+
+Configuration should not be hardcoded into source code.
+
+Bad:
+
+```js
+const mongoUrl =
+    "mongodb+srv://username:password@cluster...";
+```
+
+Better:
+
+```js
+const mongoUrl = process.env.MONGODB_URI;
+```
+
+Common variables:
+
+```env
+NODE_ENV=production
+PORT=3000
+MONGODB_URI=
+REDIS_URL=
+JWT_SECRET=
+```
+
+Secrets should not be committed to Git.
+
+`.gitignore`:
+
+```gitignore
+.env
+node_modules/
+```
+
+An `.env.example` file can document required configuration:
+
+```env
+NODE_ENV=
+PORT=
+MONGODB_URI=
+REDIS_URL=
+JWT_SECRET=
+```
+
+The example file contains variable names without actual credentials.
+
+# 7. Production Logging
+
+Development logging may look like:
+
+```js
+console.log(req.method, req.url);
+```
+
+This is useful during development but production applications require more structured information.
+
+A production request log can contain:
+
+```json
+{
+    "level": "info",
+    "method": "GET",
+    "path": "/api/v1/tasks",
+    "statusCode": 200,
+    "responseTime": 42
+}
+```
+
+Useful production log information:
+
+* Timestamp
+* Log level
+* HTTP method
+* Request path
+* Status code
+* Response duration
+* Request ID
+* Process ID
+* Error details when appropriate
+
+## Request ID
+
+A request ID helps trace a single request through multiple systems.
+
+Example:
+
+```text
+Request ID: 8c1e...
+
+Express
+|
+MongoDB
+|
+Redis
+|
+External service
+|
+Response
+```
+
+If the request fails, the same request ID can be searched in logs.
+
+This becomes particularly useful when multiple PM2 workers are running.
+
+## Sensitive information in logs
+
+Sensitive information should not be logged.
+
+Examples:
+
+* Passwords
+* JWT secrets
+* Database passwords
+* Credit card numbers
+* Private tokens
+* Sensitive personal information
+
+Bad:
+
+```js
+console.log(req.body);
+```
+
+if the request body contains passwords or sensitive information.
+
+Logs should provide enough information for debugging without exposing confidential data.
+
+## Production errors
+
+The client should receive a safe response:
+
+```json
+{
+    "message": "Internal server error"
+}
+```
+
+while the server logs the actual diagnostic information.
+
+Example server log:
+
+```text
+Database connection timeout
+requestId=8c1e...
+route=GET /api/v1/tasks
+```
+
+Returning complete stack traces to clients can expose internal implementation details.
+
+# 8. Production Deployment Pipeline
+
+Deployment moves the application from development into infrastructure where it can serve real traffic.
+
+A basic deployment pipeline:
+
+```text
+Git push
+|
+Install dependencies
+|
+Run tests
+|
+Build
+|
+Deploy
+|
+Start/reload application
+|
+Health check
+|
+Production
+```
+
+The important part is that deployment should be repeatable.
+
+Manual deployment such as:
+
+```text
+Copy files
+|
+Install random dependencies
+|
+Start server
+|
+Hope everything works
+```
+
+is difficult to maintain.
+
+## npm ci
+
+For CI/CD environments:
+
+```bash
+npm ci
+```
+
+installs dependencies from `package-lock.json`.
+
+This provides a predictable dependency installation process.
+
+Production can use:
+
+```bash
+npm ci --omit=dev
+```
+
+when development dependencies are not required at runtime.
+
+## Test before deployment
+
+A simple pipeline:
+
+```bash
+npm ci
+npm test
+npm run build
+```
+
+If tests fail:
+
+```text
+npm test
+|
+FAIL
+|
+Deployment stops
+```
+
+If tests pass:
+
+```text
+npm test
+|
+PASS
+|
+Build
+|
+Deploy
+```
+
+This prevents known test failures from being deployed automatically.
+
+## Build step
+
+A plain JavaScript Express API may not need a build step.
+
+A TypeScript application may use:
+
+```bash
+npm run build
+```
+
+A frontend application such as React or Vue normally requires its own build process.
+
+The deployment pipeline should match the actual project architecture.
+
+# 9. Health Check Endpoint
+
+A production application should expose a lightweight health endpoint.
+
+Example:
+
+```js
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        status: "ok"
+    });
+});
+```
+
+A cloud platform or monitoring service can call:
+
+```text
+GET /health
+```
+
+to verify that the API is responding.
+
+Example response:
+
+```json
+{
+    "status": "ok"
+}
+```
+
+## Database health check
+
+A more advanced health endpoint can also check dependencies.
+
+```text
+API
+|
+MongoDB reachable?
+|
+Redis reachable?
+|
+Return health information
+```
+
+However, dependency checks should be designed carefully.
+
+If Redis temporarily fails but the application can still operate without caching, the API may still be able to serve requests.
+
+For larger systems, separate concepts such as:
+
+```text
+Liveness
+Readiness
+```
+
+can be used.
+
+Liveness indicates that the process itself is alive.
+
+Readiness indicates that the application is ready to receive traffic.
+
+# 10. Cloud Deployment Architecture
+
+A production Node.js API can be structured like:
+
+```text
+Client
+|
+Cloud Load Balancer
+|
+Node.js Application
+|
+|-- PM2 Worker 1
+|-- PM2 Worker 2
+|-- PM2 Worker 3
+|-- PM2 Worker 4
+|
+|-- MongoDB
+|
+|-- Redis
+```
+
+MongoDB stores persistent application data.
+
+Redis stores cached data and potentially other shared temporary state.
+
+PM2 manages Node.js processes.
+
+The cloud infrastructure provides the compute and networking required to make the API available.
+
+## Stateless API architecture
+
+Each worker should be capable of processing requests independently.
+
+Shared state should be placed outside the worker process when required.
+
+Example:
+
+```text
+PM2 Worker 1
+|
+PM2 Worker 2
+|
+PM2 Worker 3
+|
+      |
+      v
+    Redis
+      |
+      v
+   MongoDB
+```
+
+This allows requests to move between workers without losing important application state.
+
+# 11. Production Database Configuration
+
+Development and production databases should be separated.
+
+Development:
+
+```env
+MONGODB_URI=mongodb://localhost:27017/task_manager_dev
+```
+
+Production:
+
+```env
+MONGODB_URI=mongodb+srv://...
+```
+
+The production database should not be used for local experiments or automated tests.
+
+Database credentials should be stored securely through environment configuration.
+
+Database access should also use appropriate:
+
+* Authentication
+* Network restrictions
+* User permissions
+* Encryption
+* Backup strategy
+
+# 12. Complete Practice Build
+
+The complete module can be implemented using a production-style Task Manager API.
+
+Project structure:
+
+```text
+production-task-api/
+|
+|-- src/
+|   |-- app.js
+|   |-- server.js
+|   |
+|   |-- config/
+|   |
+|   |-- routes/
+|   |
+|   |-- controllers/
+|   |
+|   |-- models/
+|   |
+|   |-- middleware/
+|   |
+|   |-- services/
+|   |
+|   |-- utils/
+|
+|-- tests/
+|   |-- tasks.test.js
+|   |-- health.test.js
+|
+|-- ecosystem.config.js
+|-- .env.example
+|-- .gitignore
+|-- package.json
+|-- package-lock.json
+```
+
+## Required endpoints
+
+```text
+POST   /api/v1/tasks
+GET    /api/v1/tasks
+GET    /api/v1/tasks/:id
+PATCH  /api/v1/tasks/:id
+DELETE /api/v1/tasks/:id
+GET    /health
+```
+
+## Task model
+
+```text
+Task
+|
+|-- title
+|-- description
+|-- priority
+|-- status
+|-- createdAt
+|-- updatedAt
+```
+
+MongoDB remains the source of truth.
+
+## Testing layer
+
+Tests should cover:
+
+```text
+POST /tasks
+|
+Valid task
+Invalid task
+
+GET /tasks
+|
+All tasks
+Priority filtering
+Empty result
+
+GET /tasks/:id
+|
+Existing task
+Missing task
+
+PATCH /tasks/:id
+|
+Valid update
+Invalid update
+Missing task
+
+DELETE /tasks/:id
+|
+Existing task
+Missing task
+
+GET /health
+|
+Healthy response
+```
+
+The entire suite should run with:
+
+```bash
+npm test
+```
+
+## Redis layer
+
+Cache:
+
+```text
+GET /api/v1/tasks
+GET /api/v1/tasks/:id
+```
+
+Cache keys:
+
+```text
+tasks:all
+tasks:priority:high
+tasks:priority:medium
+tasks:priority:low
+task:<id>
+```
+
+Example:
+
+```js
+await redisClient.setEx(
+    cacheKey,
+    60,
+    JSON.stringify(tasks)
+);
+```
+
+TTL:
+
+```text
+60 seconds
+```
+
+Write operations should invalidate affected cache entries.
+
+```text
+POST task
+|
+MongoDB create
+|
+Invalidate tasks cache
+
+PATCH task
+|
+MongoDB update
+|
+Invalidate task cache
+|
+Invalidate affected task list cache
+
+DELETE task
+|
+MongoDB delete
+|
+Invalidate task cache
+|
+Invalidate affected task list cache
+```
+
+## PM2 layer
+
+Development:
+
+```bash
+npm run dev
+```
+
+Production:
+
+```bash
+pm2 start ecosystem.config.js --env production
+```
+
+Cluster configuration:
+
+```text
+PM2
+|
+|-- Worker 1
+|-- Worker 2
+|-- Worker 3
+|-- Worker 4
+```
+
+All workers use the same MongoDB and Redis services.
+
+No worker should depend on another worker's local JavaScript memory for shared application state.
+
+## Environment configuration
+
+`.env.example`:
+
+```env
+NODE_ENV=production
+PORT=3000
+MONGODB_URI=
+REDIS_URL=
+JWT_SECRET=
+```
+
+Actual production values should be configured through the server or cloud platform.
+
+The actual `.env` file should not be committed.
+
+## Production logging
+
+Useful request information:
+
+```text
+Timestamp
+Process ID
+Request ID
+HTTP method
+URL
+Status code
+Response time
+```
+
+Example:
+
+```text
+2026-10-07T10:30:22.000Z
+pid=18240
+requestId=abc123
+GET /api/v1/tasks
+status=200
+duration=24ms
+```
+
+# 13. Performance Verification
+
+Caching and clustering should not be added only because they are common production technologies.
+
+Performance should be measured before and after optimization.
+
+Important metrics include:
+
+```text
+Average response time
+P95 response time
+P99 response time
+Requests per second
+Database query count
+Redis cache hit rate
+CPU usage
+Memory usage
+Error rate
+```
+
+Example:
+
+```text
+Before Redis
+
+Average response time: 180 ms
+Database queries: 1000
+```
+
+After Redis:
+
+```text
+Average response time: 25 ms
+Database queries: 50
+Cache hit rate: 95%
+```
+
+The actual numbers depend on infrastructure and workload.
+
+The important part is measuring the result rather than assuming that caching improved performance.
+
+## Cache hit ratio
+
+Cache hit ratio:
+
+```text
+Cache hits / Total cache requests
+```
+
+Example:
+
+```text
+900 cache hits
+100 cache misses
+
+900 / 1000
+
+= 90% cache hit ratio
+```
+
+A low cache hit ratio can indicate:
+
+* TTL is too short
+* Cache keys are too specific
+* Data changes frequently
+* Requests are not repeated
+* Cache is being invalidated too frequently
+
+# 14. Load Testing
+
+Load testing generates many requests against an API to observe how the application behaves under traffic.
+
+`autocannon` is one tool that can be used with Node.js applications.
+
+Install:
+
+```bash
+npm install --save-dev autocannon
+```
+
+Example:
+
+```bash
+npx autocannon -c 50 -d 20 http://localhost:3000/api/v1/tasks
+```
+
+`-c 50` means 50 concurrent connections.
+
+`-d 20` means 20 seconds.
+
+This can be used to compare:
+
+```text
+Single Node.js process
+vs
+PM2 cluster
+```
+
+and:
+
+```text
+MongoDB-only endpoint
+vs
+Redis-cached endpoint
+```
+
+Load tests should run against a controlled environment.
+
+A load test should not be directed at an unrelated production service without authorization.
+
+# 15. Final Module Workflow
+
+The complete module workflow:
+
+```text
+Build Express API
+|
+Write automated endpoint tests
+|
+Connect MongoDB
+|
+Run test suite
+|
+Identify expensive/repeated database reads
+|
+Add Redis caching where appropriate
+|
+Measure cache hit rate
+|
+Measure response time
+|
+Configure PM2
+|
+Run multiple workers when workload benefits from it
+|
+Keep application state external/shared where required
+|
+Configure NODE_ENV=production
+|
+Configure production secrets
+|
+Add production logging
+|
+Add health endpoint
+|
+Run tests in deployment pipeline
+|
+Deploy application
+|
+Start/reload PM2 workers
+|
+Run health check
+|
+Monitor logs
+|
+Monitor CPU
+|
+Monitor memory
+|
+Monitor latency
+|
+Monitor errors
+```
+
+The complete progression is:
+
+```text
+Development
+|
+Automated Testing
+|
+Reliable API
+|
+Caching
+|
+Performance Measurement
+|
+PM2 Process Management
+|
+Production Configuration
+|
+Deployment
+|
+Monitoring
+```
+
+# Notes:
+
+* Automated tests should protect important API behavior from regression.
+* Supertest is useful for testing Express endpoints without manually starting a server.
+* `app.js` and `server.js` should be separated so the Express application can be imported into tests.
+* Tests should cover successful requests as well as expected failures.
+* Authentication and authorization behavior should be tested.
+* Production tests should never accidentally use the production database.
+* MongoDB should remain the source of truth for persistent task data.
+* Redis should normally be treated as a cache or shared temporary data store.
+* Cache keys should clearly identify the data being cached.
+* TTL controls how long cached data remains available.
+* Database writes can make existing cache entries stale.
+* Cache invalidation should be designed together with write operations.
+* PM2 can restart crashed Node.js processes.
+* PM2 cluster mode can run multiple Node.js processes.
+* Multiple workers can make better use of multi-core server capacity.
+* More workers do not automatically mean better performance.
+* Normal JavaScript variables are not automatically shared between PM2 workers.
+* Shared state should use Redis, a database or another external store when required.
+* CPU-heavy operations may require Worker Threads, background workers or separate services.
+* `NODE_ENV=production` identifies the production environment.
+* Secrets should never be committed to Git.
+* `.env` should normally be added to `.gitignore`.
+* Production logs should contain enough information to diagnose problems without exposing sensitive information.
+* Request IDs are useful for tracing requests across multiple workers and services.
+* A health endpoint gives deployment and monitoring systems a simple way to check application availability.
+* CI/CD should run tests before deployment.
+* A failed test should stop an automated deployment.
+* Performance improvements should be measured instead of assumed.
+* Redis caching, PM2 clustering and other optimizations should solve an actual bottleneck rather than being added only because they are common production technologies.
+
+
 
 

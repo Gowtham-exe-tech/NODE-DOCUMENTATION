@@ -174,15 +174,45 @@
 // ------------------------------------------------------------------------------------------------------------------
 //Stream
 // ------------------------------------------------------------------------------------------------------------------
-            
-        
-            
+
+
+
 // creating a server using http module
 
-const http = require("http");
+// const http = require("http");
 
-const Server = http.createServer(req, res, ()=>{
-    console.log("Server ended.....")
-});
+// const Server = http.createServer(req, res, ()=>{
+//     console.log("Server ended.....")
+// });
 
-Server.listen(3000);
+// Server.listen(3000);
+
+
+// ------------------------------------------------------------------------------------------------------------------
+//logic check
+// ------------------------------------------------------------------------------------------------------------------
+// const priority = "lpow";
+// const allowedPriority = ["low", "medium", "high"];
+
+//     if(!allowedPriority.includes(priority.toLowerCase())){
+//         console.log(`fasle`);
+//     }else {
+//         console.log(`trse`)
+//     }
+
+const tasks = [
+    {
+        id: 1,
+        title: "Fix payment API",
+        priority: "high"
+    },
+    {
+        id: 2,
+        title: "Update dashboard",
+        priority: "medium"
+    }
+];
+
+const taskId = 1;
+const taskIndex = tasks.findIndex(task => task.id === taskId);
+console.log(taskIndex);

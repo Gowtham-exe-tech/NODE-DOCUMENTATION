@@ -1,0 +1,26 @@
+Payload : refer to the actual data carried inside a message or request,
+            excludes metadata, tokens, cookies nd routing information.
+            (Primary data we sending or receiving)
+
+Headers/ MetaData: Info about request. Eg: Content-type, Authorization, tokens, User-agent, IP Address.
+
+Idempotent: executing once or multiple state results in same result or server state.
+Idempotent: (pressing lift button)
+Non - Idempotent: (pressing pay button $10, pressing it 4 times charges $40 instead of $10)
+
+
+Route parameters(req.params) - Uniquely identifies a specific single resource
+eg: GET /api/tasks/12   =>  /api/tasks/:id
+
+Request Body (req.body) => payload, Carries large or structured data needed to create or update a resource on the server.
+eg:  { "title": "Learn Express", "priority": "high" }
+
+Query Parameters(req.query) => Provides optional instructions to modify how data is retrieved (filtering, sorting, searching, or pagination). It doesn't target a single resource; it modifies the query for a collection.
+eg: GET /api/tasks?priority=high&sort=asc
+
+
+
+
+POC-2
+1. HTTP methods + basic status-code handling
+2.

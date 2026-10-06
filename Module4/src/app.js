@@ -1,25 +1,31 @@
-const express = require("express");
-const requestLogger = require("./middleware/requestLogger");
-const errorHandler = require("./middleware/errorHandler");
-const asyncHandler = require("./middleware/asyncHandler");
-const taskRoutes = require("./routes/task.routes");
-const AppError = require("./errors/AppError");
+import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import userRoutes from "./routes/userRoutes.js";
+import productRoutes from "./routes/productRoutes.js";
+import orderRoutes from "./routes/orderRoutes.js";
+
 const app = express();
-// application-level middleware, runs on every request in this order
-app.use(requestLogger);
-app.use(express.json()); // fills req.body from json
-app.use("/api/tasks", taskRoutes);
-// demo route to see an unexpected error (500), delete it later
-app.get(
-  "/api/debug/crash",
-  asyncHandler(async () => {
-    throw new Error("Database exploded");
-  }),
+
+const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+
+app.use(express.json());
+
+app.use(express.static(path.join(currentDirectory, "../public")));
+
+app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/products", productRoutes);
+app.use("/api/v1/orders", orderRoutes);
+
+app.get("/api/v1/health", (req, res) =>
+  res.json({ status: "ok", message: "E-commerce API is running" }),
 );
-// nothing matched above, so make a 404
-app.use((req, res, next) => {
-  next(new AppError(`Route ${req.method} ${req.originalUrl} not found`, 404));
+
+app.use((req, res) => res.status(404).json({ message: "Route not found" }));
+
+app.use((error, req, res, next) => {
+  console.error("Unexpected error:", error);
+  res.status(500).json({ message: "Something went wrong on the server" });
 });
-// error handler must be the LAST middleware
-app.use(errorHandler);
-module.exports = app;
+
+export default app;
